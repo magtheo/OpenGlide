@@ -64,7 +64,7 @@ bool Injector::setup() {
         KEY_A,KEY_B,KEY_C,KEY_D,KEY_E,KEY_F,KEY_G,KEY_H,KEY_I,KEY_J,KEY_K,KEY_L,KEY_M,
         KEY_N,KEY_O,KEY_P,KEY_Q,KEY_R,KEY_S,KEY_T,KEY_U,KEY_V,KEY_W,KEY_X,KEY_Y,KEY_Z,
         KEY_0,KEY_1,KEY_2,KEY_3,KEY_4,KEY_5,KEY_6,KEY_7,KEY_8,KEY_9,
-        KEY_SPACE,KEY_DOT,KEY_COMMA,KEY_ENTER,KEY_MINUS,KEY_LEFTSHIFT
+        KEY_SPACE,KEY_DOT,KEY_COMMA,KEY_ENTER,KEY_MINUS,KEY_LEFTSHIFT,KEY_BACKSPACE
     };
     for (size_t i = 0; i < sizeof(keys)/sizeof(keys[0]); i++)
         ioctl(m_fd, UI_SET_KEYBIT, keys[i]);
@@ -91,4 +91,13 @@ bool Injector::commit(const QString &word) {
     }
     emitKey(KEY_SPACE, 1); emitKey(KEY_SPACE, 0);   // trailing separator (spec §9.2)
     return true;
+}
+
+void Injector::backspace(int n) {
+    if (m_fd < 0 && !setup()) return;
+    for (int i = 0; i < n; i++) {
+        emitKey(KEY_BACKSPACE, 1);
+        emitKey(KEY_BACKSPACE, 0);
+        QThread::usleep(2000);
+    }
 }

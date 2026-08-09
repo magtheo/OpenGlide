@@ -25,14 +25,31 @@ Window {
     property bool pending: false
     property bool lastShort: false
     property string committed: ""
+    property string lastWord: ""
+    property bool timedOut: false
+    property bool decoderDead: false
 
     // PURE binding target — do NOT assign status.text imperatively anywhere
     function stateText() {
+        if (decoderDead) return "decoder stopped — restart the app";
         if (!decoder.ready) return "decoder warming up…";
         if (lastShort) return "(too short — glide across more keys)";
         if (pending) return "decoding…";
+        if (timedOut) return "decode timed out — glide again";
         if (candidates.length === 0) return "focus a text editor, then glide a word here";
         return `top-1 “${candidates[0].text}” committed   (greedy “${greedyText}”, ${decMs.toFixed(0)} ms)`;
+    }
+
+    // One-click correction: the top candidate is auto-committed; clicking any other
+    // candidate backspaces over the last word (+ its trailing space) and injects it.
+    function correct(i) {
+        if (i < 0 || i >= candidates.length) return;
+        const nw = candidates[i].text;
+        if (nw === lastWord) return;                       // already what's committed
+        if (lastWord.length > 0) injector.backspace(lastWord.length + 1);
+        injector.commit(nw);                               // types nw + trailing space
+        committed = committed.slice(0, committed.length - lastWord.length) + nw;
+        lastWord = nw;
     }
 
     Rectangle {
@@ -52,6 +69,11 @@ Window {
                         text: modelData.text; font.bold: index === 0; font.pixelSize: 18
                         color: index === 0 ? "#ffffff" : "#333"
                     }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: win.correct(index)
+                    }
                 }
             }
         }
@@ -62,6 +84,11 @@ Window {
         anchors.top: topbar.bottom; anchors.horizontalCenter: parent.horizontalCenter; anchors.topMargin: 8
         text: win.stateText()   // pure binding — updates automatically on every state-var change
         font.pixelSize: 15; color: "#444"
+    }
+    Timer {
+        id: watchdog
+        interval: 20000; repeat: false   // stuck-but-alive backstop only; real crashes are caught by decoderDied
+        onTriggered: if (win.pending) { win.pending = false; win.timedOut = true; win.candidates = [] }
     }
 
     Item {
@@ -99,7 +126,8 @@ Window {
                 if (points.length < 4) { win.lastShort = true; win.pending = false; win.candidates = []; return; }
                 win.lastShort = false;
                 pathCanvas.pts = points; pathCanvas.requestPaint();
-                win.candidates = []; win.pending = true;
+                win.candidates = []; win.pending = true; win.timedOut = false;
+                watchdog.restart();
                 if (decoder.ready) decoder.decode(points);
             }
         }
@@ -119,12 +147,18 @@ Window {
     Connections {
         target: decoder
         function onCandidatesReady(greedy, candidates, ms) {
-            win.greedyText = greedy; win.candidates = candidates; win.decMs = ms; win.pending = false;
+            watchdog.stop();
+            win.greedyText = greedy; win.candidates = candidates; win.decMs = ms; win.pending = false; win.timedOut = false;
             if (candidates.length > 0) {
                 const word = candidates[0].text;
                 injector.commit(word);
+                win.lastWord = word;
                 win.committed = (win.committed.length ? win.committed + " " : "") + word;
             }
+        }
+        function onDecoderDied() {
+            watchdog.stop();
+            win.decoderDead = true; win.pending = false; win.candidates = [];
         }
         // no onReadyChanged: the status binding reads decoder.ready directly
     }

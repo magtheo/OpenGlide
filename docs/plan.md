@@ -43,9 +43,9 @@ Probes, FUTO validation, ADRs, data contracts. (`tools/` + `docs/decisions/` + `
 The spec's Phase 1 flow works end-to-end: hold LMB → glide → FUTO decodes → top word injected into a focused app (`tools/qt-prototype`). Verified on XWayland — words reach Firefox/editor/terminal; `WindowDoesNotAcceptFocus` preserves keyboard focus (§17).
 
 Remaining to harden Phase 1 toward product quality:
-- Native C++ `SwipeEngine` (replace the Python-over-pipe decoder; ~100–300 ms/glide now → ~5 ms), behind the ADR-0003 worker.
+- Native C++ `SwipeEngine` (replace the Python-over-pipe decoder; measured ~1.3 s/glide now → ~5 ms), behind the ADR-0003 worker.
 - UTF-8 injection via IBus — primary path **validated** (`tools/ibus-engine-probe`; ADR-0002 gate met). Remaining: wire it into the Qt prototype (engine service + D-Bus commit, `uinput` fallback) and the `input-method-v2` path for wlroots compositors.
-- One-click candidate correction; decoder overshoot adapter (§6.3); watchdog for the `pending` state.
+- ~~One-click candidate correction; decoder overshoot adapter (§6.3); watchdog for the `pending` state~~ ✅ done (`tools/qt-prototype`): candidate click → backspace + recommit; overshoot adapter drops trailing OOB + clamps to `[0,1]` before decode (unit-tested); **death-detection** (`QProcess::finished` → `decoderDied`) replaced the blind timeout so slow-but-alive decodes never false-trip — a 20 s stuck-backstop remains.
 - Out-of-window capture under Qt's mouse-grab on each platform.
 
 ### Phase 2–5 — per spec §28

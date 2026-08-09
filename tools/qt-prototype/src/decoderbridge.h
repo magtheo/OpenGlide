@@ -18,10 +18,12 @@ public:
 signals:
     void readyChanged();
     void candidatesReady(const QString &greedy, const QVariantList &candidates, double ms);
+    void decoderDied();   // futo_server exited unexpectedly — decode can never complete
 
 private slots:
     void onStderr();
     void onStdout();
+    void onFinished(int exitCode, QProcess::ExitStatus status);
 
 private:
     QProcess *m_proc = nullptr;

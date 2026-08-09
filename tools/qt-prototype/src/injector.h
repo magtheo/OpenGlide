@@ -12,6 +12,8 @@ public:
     ~Injector();
     // Type `word` as a sequence of key events into whatever holds keyboard focus.
     Q_INVOKABLE bool commit(const QString &word);
+    // Delete `n` characters (Backspace) from the focused field — used by one-click correction.
+    Q_INVOKABLE void backspace(int n);
 
 private:
     bool setup();                 // create the uinput device once

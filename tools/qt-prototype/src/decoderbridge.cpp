@@ -24,6 +24,7 @@ DecoderBridge::DecoderBridge(QObject *parent) : QObject(parent) {
     m_proc->setProcessChannelMode(QProcess::SeparateChannels);
     connect(m_proc, &QProcess::readyReadStandardError, this, &DecoderBridge::onStderr);
     connect(m_proc, &QProcess::readyReadStandardOutput, this, &DecoderBridge::onStdout);
+    connect(m_proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &DecoderBridge::onFinished);
     m_proc->start(PY, QStringList{SERVER});
 }
 
@@ -60,6 +61,13 @@ void DecoderBridge::onStdout() {
         }
         emit candidatesReady(greedy, cands, ms);
     }
+}
+
+void DecoderBridge::onFinished(int, QProcess::ExitStatus) {
+    // futo_server gone (crash / exit). Decode can never return -> tell the UI now,
+    // instead of letting a blind timer guess "timed out" on a merely slow decode.
+    if (m_ready) { m_ready = false; emit readyChanged(); }
+    emit decoderDied();
 }
 
 void DecoderBridge::decode(const QVariantList &points) {

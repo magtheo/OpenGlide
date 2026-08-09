@@ -34,6 +34,19 @@ def emissions(enc, xs, ys, ts):
     le, _, _ = enc.execute((feats, keys, mask))
     return le.numpy()[0]
 
+def adapt_overshoot(pts):
+    """Decoder adapter (refines spec §6.3). The collector stays unclamped, but the
+    overshoot probe showed trailing/mid overshoot corrupts decode while leading
+    overshoot is tolerated. Drop trailing out-of-bounds points (mouse momentum past
+    the last key) and clamp the rest to [0,1] so mid overshoot pins to the edge
+    instead of spawning a phantom key. A no-op for clean in-bounds captures."""
+    end = len(pts)
+    while end > 1 and (pts[end-1]["x"] < 0 or pts[end-1]["x"] > 1 or
+                       pts[end-1]["y"] < 0 or pts[end-1]["y"] > 1):
+        end -= 1
+    return [{"x": min(1.0, max(0.0, p["x"])),
+             "y": min(1.0, max(0.0, p["y"])), "t": p["t"]} for p in pts[:end]]
+
 def main():
     enc = load_encoder()
     dictionary = load_dict("/usr/share/dict/american-english")
@@ -46,7 +59,7 @@ def main():
             req = json.loads(line)
         except Exception:
             continue
-        pts = req.get("points", [])
+        pts = adapt_overshoot(req.get("points", []))
         if len(pts) < 4:
             print(json.dumps({"greedy": "", "candidates": [], "ms": 0.0}), flush=True)
             continue
