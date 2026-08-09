@@ -1,6 +1,7 @@
 # probe binaries (no extension) — built, never committed
 /text-output-probe/text-probe
 /surface-probe/surface-probe
+/swipe-capture/swipe_capture
 
 # wayland-scanner output — regenerated from protocols/*.xml by `make`
 /text-output-probe/generated/

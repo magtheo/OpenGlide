@@ -107,6 +107,11 @@ Re-ran with the first letter of each prompt highlighted and the instruction "sta
 
 **Product insight (mouse-specific):** because the cursor persists between words (a finger lifts; a mouse cursor does not), reliable decode requires beginning each glide on the target's first letter. The product UX must make this natural, or the decoder must tolerate mid-keyboard starts. (Phone swipe gets this for free; mouse glide typing does not.)
 
+### Spec-aligned capture surface (§4.2 / §6.2 / §6.3) + overshoot finding
+`tools/swipe-capture/` — a minimal C/`Xlib` `SwipeSurface`: on LMB press it `XGrabPointer`s the pointer (capture continues outside the window, §6.2) and records **unclamped** normalized coords (overshoot preserved, §6.3). Validated end-to-end: dictionary top-1 = **9/9 (100%)** on captured glides (`capture.jsonl`) — the spec-aligned capture path produces trajectories the decoder handles perfectly.
+
+**Overshoot probe (`overshoot_probe.py`) refines §6.3:** the encoder tolerates *leading* overshoot (start before the first key, x→−0.3 → still `computer`) but **trailing and mid-trajectory overshoot corrupt decode** (tail to x=1.3 → `computep`; mid spike x>1.1 → `comppter`). This is mouse-specific — phone-swipe overshoot is usually at the start (tolerated), but mouse momentum produces trailing overshoot. **Conclusion: keep the collector unclamped (§6.3 stands for capture), but the decoder adapter must handle trailing/mid overshoot** (clamp to `[0,1]`, or drop trailing out-of-bounds points, before inference). Heads-up for the real `SwipeDecoder` adapter.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make
