@@ -1,0 +1,78 @@
+# ADR-0003: Async contracts — swipe identity, single-owner output, latency budget
+
+- **Status:** Accepted
+- **Date:** 2026-08-09
+- **Supersedes:** the diagram-only threading model in spec §26–§27
+
+## Context
+The spec's threading model is a diagram, not a contract. Several race-condition
+classes are unaddressed: what happens when a new swipe starts before the previous
+decode returns; which thread owns the FUTO engine; how results reach the UI; what
+"feel immediate" (spec §26) actually means in milliseconds.
+
+Two grounding facts from the `swipe-library` README and `engine.hpp`:
+
+1. **`SwipeEngine` is not thread-safe** (README: "This class is not thread-safe so
+   you should take care to avoid concurrent usage"). Every call must be serialized
+   by the caller.
+2. The engine already exposes per-stage timing via `last_timing()` →
+   `{resample_us, encoder_us, decoder_us, beam_us, lm_us, total_us}`. Latency is
+   therefore **measurable directly**, not estimated.
+
+## Decision
+
+### 1. Swipe identity + stale-discard
+Every gesture gets a monotonically increasing `SwipeId` (uint64). Every async
+decode is tagged with the SwipeId that started it. When a result arrives whose
+SwipeId ≠ the current one, **discard it**. Obsolete predictions are never queued,
+never displayed, never committed.
+
+```
+swipe #41 start → decode(#41)
+swipe #42 start before #41 returns → decode(#42), current = #42
+#41 returns → STALE → discard
+#42 returns → display + commit
+```
+
+### 2. Single swipe worker owns SwipeEngine
+Because `SwipeEngine` is not thread-safe, exactly **one dedicated worker thread**
+owns the engine instance and serializes every `recognize` / `setMode` call. The
+UI thread never touches the engine. Non-negotiable.
+
+### 3. Single-owner output dispatcher
+Swipe worker, speech worker, and correction UI never write to applications
+directly. All output flows through **one** `TextOutputQueue` drained by a single
+backend owner:
+
+```
+SwipeEngine worker ─┐
+Whisper worker     ─┼→ TextOutputQueue → one output owner → TextBackend
+Correction UI      ─┘
+```
+No two inference workers ever commit concurrently. This also satisfies
+input-method-v2's "one input-method per seat" constraint (ADR-0002).
+
+### 4. Latency budget
+Provisional target: **release → first candidate ≤ 100 ms p95** on a defined
+reference machine. This is a *hypothesis*. Phase 1 measures the full pipeline
+(preprocess → infer → dict → rank → visible) via `last_timing()` and reports
+p50 / p95 / p99. Tighten to a firm SLO once measured; if FUTO comfortably beats
+100 ms, lower the bar.
+
+### 5. Thread layout
+- **UI thread** — Qt/QML, pointer events, rendering. Never blocks on engine/whisper/sqlite.
+- **Swipe worker** — owns `SwipeEngine` (serialized). Returns `DecodedWord[]` + `Timing` async.
+- **Speech worker** — whisper.cpp inference.
+- **Storage worker** — SQLite personalization/history.
+- **Output owner** — drains `TextOutputQueue`, drives the active `TextBackend`.
+
+## Consequences
+- No torn/interleaved commits; stale-discard removes a whole class of UI flicker bugs.
+- The swipe worker is a serialization bottleneck by design — acceptable because
+  inference is the only thing on it and must be serialized anyway.
+- `Timing` from the engine feeds the benchmark harness directly; the corpus record
+  in `docs/data-formats.md` carries it.
+
+## References
+- `SwipeEngine` thread-safety: https://gitlab.futo.org/keyboard/swipe-library/-/raw/master/README.md
+- `Timing` struct / `last_timing()`: `include/swipe_decoder/engine.hpp`
