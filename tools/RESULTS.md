@@ -102,6 +102,11 @@ The dictionary recovered every greedy near-miss: `geen→green`, `tavble→table
 
 **Conclusion:** FUTO decodes real mouse trajectories with dictionary at **100% top-1 on clean captures** at ~5 ms. Risk 3 is answered affirmatively — the project's core assumption holds on mouse input. Corpus saved at `tools/futo-spike/corpus.jsonl` (data-formats.md JSONL schema) for regression use.
 
+### Start-position hypothesis — CONFIRMED (controlled re-collect)
+Re-ran with the first letter of each prompt highlighted and the instruction "start the glide on the highlighted key" (`corpus-controlled.jsonl`, 18 glides). Every glide started on the correct first key, the "everything → river" anomaly vanished, and path-traces matched targets (window→`wetyui`, stone→`sdtyonbre`, place→`pljfacfe`, …). Result: **dict top-1 = 17/18 (94%)**; the single miss was a too-short stroke, not a start-position failure → 17/17 on full strokes.
+
+**Product insight (mouse-specific):** because the cursor persists between words (a finger lifts; a mouse cursor does not), reliable decode requires beginning each glide on the target's first letter. The product UX must make this natural, or the decoder must tolerate mid-keyboard starts. (Phone swipe gets this for free; mouse glide typing does not.)
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make

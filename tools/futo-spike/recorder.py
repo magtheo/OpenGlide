@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
 """Mouse-swipe recorder + FUTO greedy decode (Risk 3 measurement).
 
-Shows a QWERTY grid. Hold the left mouse button and glide through a word's
-letters; on release, greedy-decode with the FUTO encoder and record the swipe.
-Goal: measure how well FUTO decodes REAL mouse trajectories.
+v1.1 change: highlights the prompted word's FIRST key and instructs the user to
+start the glide on it — a controlled test of the start-position hypothesis for
+the glides-2-6 anomaly (paths traced 'river' regardless of target).
 
-v1 scope:
-  - In-window capture only. Pointer motion OUTSIDE the window isn't recorded
-    (needs an X pointer grab — spec S6.2; planned for v2). Keep the glide on
-    the keys.
-  - Greedy, dictionary-free decode -> a character string, exact-match vs target.
-    Real top-1/top-3 word accuracy needs a trie; that runs OFFLINE over the saved
-    corpus afterward, so you only glide once.
+v1 scope (unchanged): in-window capture only (no X pointer grab yet); greedy,
+dictionary-free live decode. The corpus is re-decoded offline with
+dictionary_decode.py for real top-1/top-3, so you only glide once.
 
 Controls:
-  hold LMB + move   glide the prompted word
-  release LMB       decode + record, advance to next word
-  right-click       skip word
+  hold LMB + move   glide the prompted word, starting on the HIGHLIGHTED key
+  release LMB       decode + record, advance
+  right-click       skip
   Esc / close       quit, print summary
-
-Run (from tools/futo-spike):
-  .venv/bin/python recorder.py [corpus.jsonl]
 """
 import json
 import os
@@ -46,7 +39,7 @@ class Recorder:
         self.words = words
         self.idx = 0
         self.swiping = False
-        self.pts = []          # (x_norm, y_norm, ms_since_start)
+        self.pts = []
         self.t0 = 0.0
         self.n = 0
         self.exact = 0
@@ -57,7 +50,7 @@ class Recorder:
         root.title("OpenGlide swipe recorder")
         self.prompt = tk.Label(root, text="", font=("sans", 20, "bold"))
         self.prompt.pack(pady=6)
-        self.result = tk.Label(root, text="hold left button and glide the word", font=("sans", 14))
+        self.result = tk.Label(root, text="start each glide ON the highlighted key", font=("sans", 13))
         self.result.pack(pady=2)
         self.stats = tk.Label(root, text="0 glides | 0 exact", font=("sans", 11))
         self.stats.pack(pady=2)
@@ -66,7 +59,6 @@ class Recorder:
         self.canvas = tk.Canvas(root, width=CANVAS_W, height=CANVAS_H, bg="#fafafa",
                                  highlightthickness=1, highlightbackground="#999")
         self.canvas.pack(padx=8, pady=8)
-        self.draw_keyboard()
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_motion)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
@@ -74,17 +66,23 @@ class Recorder:
         root.bind("<Escape>", lambda e: root.destroy())
         self.update_prompt()
 
-    def draw_keyboard(self):
+    def draw_keyboard(self, highlight=None):
+        self.canvas.delete("keys")
         kw, kh = 60, 60
         for ch, (cx, cy) in QWERTY.items():
             x, y = cx * CANVAS_W, cy * CANVAS_H
+            if ch == highlight:
+                fill, outline, width = "#ffe08a", "#e0a800", 3
+            else:
+                fill, outline, width = "#fff", "#bbb", 1
             self.canvas.create_rectangle(x - kw/2, y - kh/2, x + kw/2, y + kh/2,
-                                         outline="#bbb", fill="#fff")
-            self.canvas.create_text(x, y, text=ch.upper(), font=("sans", 16, "bold"))
+                                         outline=outline, fill=fill, width=width, tags="keys")
+            self.canvas.create_text(x, y, text=ch.upper(), font=("sans", 16, "bold"), tags="keys")
 
     def update_prompt(self):
         w = self.words[self.idx % len(self.words)]
-        self.prompt.config(text=f"Glide the word:  {w.upper()}")
+        self.prompt.config(text=f"Glide the word:  {w.upper()}   (start on the yellow key)")
+        self.draw_keyboard(highlight=w[0])
 
     def on_press(self, e):
         self.canvas.delete("path")
@@ -105,7 +103,7 @@ class Recorder:
         if not self.swiping:
             return
         self.swiping = False
-        self._record(e)  # include release point
+        self._record(e)
         if len(self.pts) < 4:
             self.result.config(text="(too short — glide across more keys)")
             return
@@ -126,7 +124,6 @@ class Recorder:
         pct = 100 * self.exact / max(self.n, 1)
         self.stats.config(text=f"{self.n} glides | {self.exact} exact ({pct:.0f}%)")
 
-        # draw the glide path for visual feedback
         flat = []
         for x, y, _ in self.pts:
             flat += [x * CANVAS_W, y * CANVAS_H]
@@ -159,11 +156,11 @@ class Recorder:
 def main():
     corpus = sys.argv[1] if len(sys.argv) > 1 else "corpus.jsonl"
     words = WORDS[:]
-    random.seed(0)
+    random.seed(7)   # different order from the first session
     random.shuffle(words)
     root = tk.Tk()
     app = Recorder(root, corpus, words)
-    print("READY", flush=True)   # readiness banner for the launcher
+    print("READY", flush=True)
     root.mainloop()
     pct = 100 * app.exact / max(app.n, 1)
     print(f"\n=== SESSION DONE: {app.n} glides, {app.exact} exact-match ({pct:.0f}%) ===", flush=True)
