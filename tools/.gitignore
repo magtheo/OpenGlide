@@ -4,3 +4,8 @@
 
 # wayland-scanner output — regenerated from protocols/*.xml by `make`
 /text-output-probe/generated/
+
+# FUTO spike: virtualenv + downloaded models (large, regenerable)
+/futo-spike/.venv/
+/futo-spike/models/
+__pycache__/

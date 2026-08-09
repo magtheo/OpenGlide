@@ -65,6 +65,29 @@ Maps an override-redirect window, then is clicked twice via `xdotool` while keyb
 | Hyprland         | input-method-v2 (expected)        | wlr-layer-shell           | pending |
 | KDE Plasma       | Fcitx5 / own IME                  | LayerShellQt              | pending |
 
+## FUTO decoder spike (spec §35 / Risk 3)
+
+Script: `tools/futo-spike/validate.py` (Python; venv at `tools/futo-spike/.venv`).
+Setup: `python3 -m venv tools/futo-spike/.venv && .venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch && .venv/bin/pip install executorch huggingface_hub numpy`.
+Run: `HF_HOME=$PWD/tools/futo-spike/models .venv/bin/python tools/futo-spike/validate.py`.
+
+### Baseline — PASS
+Dictionary-free greedy decode (encoder-only) of the model-card sample trajectory yields **"computer"**. The FUTO stack runs operationally — ADR-0001's GO is now empirically grounded, not just legally permitted.
+
+### Robustness (greedy decode under perturbation)
+
+| perturbation | result | margin |
+|---|---|---|
+| spatial Gaussian σ=0.005 / 0.01 / 0.02 | `computer` | tolerates ~2% noise |
+| spatial Gaussian σ=0.04 / 0.08 | `vompuer` / `vpmpirtre` | breaks ~0.03 |
+| subsample to 40 / 27 / 18 / 13 pts | `computer`×3 / `comper` | tolerates ~18 raw pts |
+| timing jitter 20 / 50 / 100 / 200 ms | `computer`×2 / `compouer` / `compter` | tolerates ~50 ms |
+| speed warp 0.5× / 2× / 4× | `computer`×3 | fully tolerant |
+
+**Reading:** the encoder is shape-driven and time-normalized — robust to sparse sampling and speed variation (both relevant to mice), moderately robust to spatial noise and timing jitter. Encouraging for the mouse case, but the real mouse-vs-finger answer needs actual glides.
+
+**Next:** build a mouse-swipe recorder (X11 `XRecord` or `/dev/input` evdev capture over a QWERTY grid) and capture real glides for top-1/top-3 measurement — the actual Risk-3 experiment. Needs the FUTO stack above (already installed) plus a human gliding real words.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make
