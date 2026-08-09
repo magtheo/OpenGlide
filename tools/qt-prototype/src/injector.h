@@ -14,6 +14,8 @@ public:
     Q_INVOKABLE bool commit(const QString &word);
     // Delete `n` characters (Backspace) from the focused field — used by one-click correction.
     Q_INVOKABLE void backspace(int n);
+    // Type a single character (letter/digit/space/comma/period/…) — no trailing space.
+    Q_INVOKABLE void typeChar(const QString &ch);
 
 private:
     bool setup();                 // create the uinput device once

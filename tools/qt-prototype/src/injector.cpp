@@ -78,18 +78,22 @@ bool Injector::setup() {
     return true;
 }
 
+void Injector::typeChar(const QString &ch) {
+    if (m_fd < 0 && !setup()) return;
+    if (ch.isEmpty()) return;
+    int key, shift;
+    if (!asciiToEvdev((uint32_t)ch.at(0).toLatin1(), &key, &shift)) return;
+    if (shift) emitKey(KEY_LEFTSHIFT, 1);
+    emitKey(key, 1);
+    emitKey(key, 0);
+    if (shift) emitKey(KEY_LEFTSHIFT, 0);
+    QThread::usleep(2000);
+}
+
 bool Injector::commit(const QString &word) {
     if (m_fd < 0 && !setup()) return false;
-    for (QChar qc : word) {
-        int key, shift;
-        if (!asciiToEvdev((uint32_t)qc.toLatin1(), &key, &shift)) continue;
-        if (shift) emitKey(KEY_LEFTSHIFT, 1);
-        emitKey(key, 1);
-        emitKey(key, 0);
-        if (shift) emitKey(KEY_LEFTSHIFT, 0);
-        QThread::usleep(2000);
-    }
-    emitKey(KEY_SPACE, 1); emitKey(KEY_SPACE, 0);   // trailing separator (spec §9.2)
+    for (const QChar qc : word) typeChar(QString(qc));
+    typeChar(" ");   // trailing separator (spec §9.2)
     return true;
 }
 

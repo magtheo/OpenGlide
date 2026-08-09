@@ -18,6 +18,8 @@ signals:
     void swipingChanged();
     // points: list of {x, y, t} with x,y normalized-unclamped, t in ms since press
     void swipeCompleted(QVariantList points);
+    // live normalized-unclamped cursor during a glide (for key-pop UI); same frame as swipeCompleted
+    void cursorMoved(qreal nx, qreal ny);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;

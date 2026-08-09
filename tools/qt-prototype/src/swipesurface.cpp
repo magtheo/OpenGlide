@@ -14,6 +14,7 @@ void SwipeSurface::addPoint(const QPointF &local, qint64 dtMs) {
     p.y = (h > 0) ? float(local.y() / h) : 0.0f;
     p.t = float(dtMs);
     m_pts.push_back(p);
+    emit cursorMoved(p.x, p.y);
 }
 
 void SwipeSurface::mousePressEvent(QMouseEvent *event) {
