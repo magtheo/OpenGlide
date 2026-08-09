@@ -123,6 +123,17 @@ Findings from building it:
 
 Scope: ASCII-only injection (uinput, layout-bound — ADR-0002); UTF-8 needs the input-method/IBus path. Out-of-window capture depends on Qt's mouse-grab per platform.
 
+## IBus commit path — GNOME UTF-8 (ADR-0002 gate) ✅ MET
+`tools/ibus-engine-probe/` validates the one cell `text-output-probe` left open: GNOME/mutter does **not** expose `zwp_input_method_v2`, so the IME commit path on GNOME runs through **IBus**. The probe registers a throwaway engine `openglide-probe` with the running ibus-daemon, activates it as the global engine, and on `enable` calls `ibus_engine_commit_text("blåbær æøå 日本 🫐")`.
+
+**Result (2026-08-09): EXACT MATCH.** A GTK3 sink (`gtk_sink.py`) self-triggers the probe the instant its `TextView` gains focus; the committed string lands verbatim in the buffer (`/tmp/ibus_out.txt` == `blåbær æøå 日本 🫐`), focus is retained, and the previous global engine (here `vocalinux`) is restored. Automated and deterministic.
+
+Mechanism findings:
+- **Activation works in-process:** `ibus_factory_new(ibus_bus_get_connection(bus))` + `ibus_factory_add_engine` + `ibus_bus_request_name` + `ibus_bus_register_component` on one connection is enough for ibus-daemon to `CreateEngine` back into our factory — no installed component file needed for the transient probe.
+- **Deadlock gotcha:** `ibus_bus_set_global_engine` is synchronous; calling it before the main loop runs deadlocks (ibus-daemon's `CreateEngine` callback can't dispatch while we block). Use `ibus_bus_set_global_engine_async`, kicked from an idle once the loop runs.
+- **Engine-desc NULL strings:** every string property must be populated or `register_component`'s GVariant serialization hits `g_variant_new_string(NULL)`. `IBusComponent`'s executable property is `command_line` (not `exec`).
+- **`commit_text` routes only to the focused client's context owned by the *active* engine** — so production use requires the OpenGlide engine to be the selected input method (the user switches to it, like any IME). Raw `uinput`/`XTest` cannot do non-ASCII on a non-matching layout — that asymmetry is exactly ADR-0002's point.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make

@@ -73,8 +73,13 @@ delete facilities; `XTest` is the raw-key fallback there.
 - Probe results may force per-compositor backends; acceptable and expected.
 
 ## Verification gates
-- [ ] `tools/text-output-probe` confirms `blåbær æøå 日本 🫐` lands exactly in the
-      target apps across the compositor × app matrix, and that focus is retained.
+- [x] **GNOME / IBus — validated 2026-08-09:** `tools/ibus-engine-probe` registers a
+      throwaway engine with the running ibus-daemon, activates it as the global engine,
+      and commits `blåbær æøå 日本 🫐` via `ibus_engine_commit_text`. The string lands
+      **exactly** in a focused GTK text field; keyboard focus is retained; the previous
+      engine is restored. Automated assertion (a GTK sink self-triggers the probe on focus).
+      GNOME/mutter does not expose `zwp_input_method_v2`, so IBus is the GNOME cell.
+- [ ] Sway / Hyprland / KDE cells of the compositor × app matrix (input-method-v2 there).
 
 ## References
 - input-method-v2: https://wayland.app/protocols/input-method-unstable-v2

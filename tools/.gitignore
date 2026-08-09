@@ -2,6 +2,7 @@
 /text-output-probe/text-probe
 /surface-probe/surface-probe
 /swipe-capture/swipe_capture
+/ibus-engine-probe/ibus-probe
 
 # wayland-scanner output — regenerated from protocols/*.xml by `make`
 /text-output-probe/generated/

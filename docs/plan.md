@@ -22,6 +22,7 @@ Core technical assumptions are now **measured, not guessed**:
 | Focus preservation | ✅ `WindowDoesNotAcceptFocus` keeps keyboard focus on XWayland; override-redirect is the fallback | RESULTS.md |
 | Gesture capture (§4.2/6.2/6.3) | ✅ spec-aligned `SwipeSurface` (pointer grab, unclamped) — 9/9 | tools/swipe-capture |
 | **Phase 1 prototype** | ✅ **end-to-end working** — glide → decode → injected into a real app (XWayland) | tools/qt-prototype, RESULTS.md |
+| UTF-8 via IBus (GNOME) | ✅ validated — `ibus_engine_commit_text` lands exact UTF-8, focus retained | tools/ibus-engine-probe, ADR-0002 |
 | Licensing | ✅ preliminary GO (GPL-3.0-only lib + commercial-permissive weights) | ADR-0001 |
 | Decisions / contracts | ✅ ADR-0001..0004, versioned data-formats | decisions/, data-formats.md |
 
@@ -43,7 +44,7 @@ The spec's Phase 1 flow works end-to-end: hold LMB → glide → FUTO decodes �
 
 Remaining to harden Phase 1 toward product quality:
 - Native C++ `SwipeEngine` (replace the Python-over-pipe decoder; ~100–300 ms/glide now → ~5 ms), behind the ADR-0003 worker.
-- UTF-8 injection via `input-method-v2`/IBus (currently ASCII-only uinput — ADR-0002 primary path).
+- UTF-8 injection via IBus — primary path **validated** (`tools/ibus-engine-probe`; ADR-0002 gate met). Remaining: wire it into the Qt prototype (engine service + D-Bus commit, `uinput` fallback) and the `input-method-v2` path for wlroots compositors.
 - One-click candidate correction; decoder overshoot adapter (§6.3); watchdog for the `pending` state.
 - Out-of-window capture under Qt's mouse-grab on each platform.
 
@@ -61,4 +62,4 @@ Daily keyboard (dictionary, SQLite, personalization, floating/docked) → speech
 - Decisions: [decisions/](decisions/) (ADR-0001..0004)
 - Contracts: [data-formats.md](data-formats.md)
 - Findings: [../tools/RESULTS.md](../tools/RESULTS.md)
-- Tools: `tools/qt-prototype` (Phase 1 app), `tools/futo-spike`, `tools/swipe-capture`, `tools/text-output-probe`, `tools/surface-probe`
+- Tools: `tools/qt-prototype` (Phase 1 app), `tools/ibus-engine-probe` (GNOME UTF-8 commit), `tools/futo-spike`, `tools/swipe-capture`, `tools/text-output-probe`, `tools/surface-probe`
