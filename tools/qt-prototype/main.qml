@@ -48,16 +48,18 @@ Window {
     property bool decoderDead: false
     property string injected: ""
     property string activeKey: ""        // key under the cursor during a glide (key-pop)
+    property int warmupSecs: 0
 
     function stateText() {
         if (decoderDead) return "decoder stopped — restart the app";
-        if (!decoder.ready) return "decoder warming up…";
+        if (!decoder.ready) return "loading decoder… (" + warmupSecs + " s)";
         if (lastShort) return "(too short — glide across more keys)";
         if (pending) return "decoding…";
         if (timedOut) return "decode stalled — glide again";
         if (candidates.length === 0) return "focus a text editor, then glide a word here";
         return `top-1 “${candidates[0].text}” committed   (greedy “${greedyText}”, ${decMs.toFixed(0)} ms)`;
     }
+    Timer { interval: 1000; repeat: true; running: !decoder.ready && visible; onTriggered: warmupSecs += 1 }
 
     // ---- injection ops (each keeps `injected` in sync with the target field) ----
     function commitDecoded(word) { injector.commit(word); injected += word + " "; lastWord = word; }
