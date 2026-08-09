@@ -112,6 +112,17 @@ Re-ran with the first letter of each prompt highlighted and the instruction "sta
 
 **Overshoot probe (`overshoot_probe.py`) refines §6.3:** the encoder tolerates *leading* overshoot (start before the first key, x→−0.3 → still `computer`) but **trailing and mid-trajectory overshoot corrupt decode** (tail to x=1.3 → `computep`; mid spike x>1.1 → `comppter`). This is mouse-specific — phone-swipe overshoot is usually at the start (tolerated), but mouse momentum produces trailing overshoot. **Conclusion: keep the collector unclamped (§6.3 stands for capture), but the decoder adapter must handle trailing/mid overshoot** (clamp to `[0,1]`, or drop trailing out-of-bounds points, before inference). Heads-up for the real `SwipeDecoder` adapter.
 
+## Phase 1 working prototype (Qt6) — spec §28 milestone
+`tools/qt-prototype/`: Qt6/QML QWERTY + C++ `SwipeSurface` (§4.2) → persistent Python FUTO decoder (greedy + dict top-5) → uinput injection. **End-to-end verified: hold LMB → glide → decoded word → injected into a focused app (Firefox/editor/terminal) on XWayland.**
+
+Findings from building it:
+- **`Qt.WindowDoesNotAcceptFocus | Qt.WindowStaysOnTopHint` preserves keyboard focus on XWayland** (§17) — gliding in the prototype does not steal focus from the target app, so injected words land there. Override-redirect remains the fallback if a compositor ignores the hint.
+- **evdev `KEY_*` are physical scancodes (QWERTY order), not alphabetical** — `KEY_A + (c-'a')` is wrong and `'m'` collided with `KEY_LEFTSHIFT`, producing uppercase gibberish. Fixed with an explicit per-letter table (same latent bug fixed in `tools/text-output-probe/src/uinput.c`).
+- **QML binding-break gotcha:** assigning a property that already has a declarative binding destroys the binding — the status label stuck at "decoding…" until it was made a pure binding. Worth remembering for the real UI.
+- **Decode latency** via Python-over-pipe is ~100–300 ms/glide (dictionary CTC); the encoder itself is ~5 ms. The native C++ `SwipeEngine` removes the pipe + Python overhead.
+
+Scope: ASCII-only injection (uinput, layout-bound — ADR-0002); UTF-8 needs the input-method/IBus path. Out-of-window capture depends on Qt's mouse-grab per platform.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make
