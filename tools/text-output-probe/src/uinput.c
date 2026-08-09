@@ -30,9 +30,15 @@ static void msleep(int ms) {
 
 static int ascii_to_evdev(uint32_t cp, int *key, int *shift) {
     *shift = 0;
-    if (cp >= 'a' && cp <= 'z') { *key = KEY_A + (int)(cp - 'a'); return 1; }
-    if (cp >= 'A' && cp <= 'Z') { *key = KEY_A + (int)(cp - 'A'); *shift = 1; return 1; }
-    if (cp >= '0' && cp <= '9') { *key = KEY_0 + (int)(cp - '0'); return 1; }
+    static const int letters[26] = {
+        KEY_A,KEY_B,KEY_C,KEY_D,KEY_E,KEY_F,KEY_G,KEY_H,KEY_I,KEY_J,
+        KEY_K,KEY_L,KEY_M,KEY_N,KEY_O,KEY_P,KEY_Q,KEY_R,KEY_S,KEY_T,
+        KEY_U,KEY_V,KEY_W,KEY_X,KEY_Y,KEY_Z
+    };
+    static const int digits[10] = {KEY_0,KEY_1,KEY_2,KEY_3,KEY_4,KEY_5,KEY_6,KEY_7,KEY_8,KEY_9};
+    if (cp >= 'a' && cp <= 'z') { *key = letters[cp - 'a']; return 1; }
+    if (cp >= 'A' && cp <= 'Z') { *key = letters[cp - 'A']; *shift = 1; return 1; }
+    if (cp >= '0' && cp <= '9') { *key = digits[cp - '0']; return 1; }
     switch (cp) {
         case ' ':  *key = KEY_SPACE;  return 1;
         case '.':  *key = KEY_DOT;    return 1;
