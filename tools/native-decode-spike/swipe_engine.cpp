@@ -150,8 +150,21 @@ static double ctc_score(const float* em, const std::vector<int>& labels, const s
 std::vector<Candidate> SwipeEngine::decode(const std::vector<SwipePoint>& pts, std::string* greedy_out) {
     std::vector<Candidate> result;
     if (!ready_ || pts.size() < 4) return result;
+    // Overshoot adapter (§6.3): drop trailing out-of-bounds points (mouse momentum
+    // past the last key) and clamp the rest to [0,1] (mid overshoot -> edge).
+    int end = (int)pts.size();
+    while (end > 1 && (pts[end - 1].x < 0.f || pts[end - 1].x > 1.f ||
+                       pts[end - 1].y < 0.f || pts[end - 1].y > 1.f)) end--;
+    std::vector<SwipePoint> a;
+    a.reserve(end);
+    for (int i = 0; i < end; i++) {
+        SwipePoint p = pts[i];
+        p.x = std::min(1.f, std::max(0.f, p.x));
+        p.y = std::min(1.f, std::max(0.f, p.y));
+        a.push_back(p);
+    }
     float feats[2 * 64];
-    resample_into(pts, feats);
+    resample_into(a, feats);
     const float* em = run_forward(feats);
     if (!em) return result;
 

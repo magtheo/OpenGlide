@@ -1,89 +1,83 @@
 #include "decoderbridge.h"
-#include <QCoreApplication>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QDir>
+#include "swipe_engine.h"
 
-// Paths (prototype on this machine). venv python + HF model cache live in futo-spike.
-static const char *PY = "/home/theo/Documents/coding/repos/OpenGlide/tools/futo-spike/.venv/bin/python";
-static const char *SERVER = "/home/theo/Documents/coding/repos/OpenGlide/tools/qt-prototype/futo_server.py";
-static const char *HF_HOME = "/home/theo/Documents/coding/repos/OpenGlide/tools/futo-spike/models";
+#include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
+#include <QMetaObject>
+#include <QTimer>
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+// Find the cached FUTO .pte (HF cache layout) relative to the app or in ~/.cache.
+static QString resolveModel() {
+    const QStringList roots = {
+        QCoreApplication::applicationDirPath() + "/../../futo-spike/models/hub",
+        QCoreApplication::applicationDirPath() + "/../futo-spike/models/hub",
+        QDir::homePath() + "/.cache/huggingface/hub",
+        "/home/theo/Documents/coding/repos/OpenGlide/tools/futo-spike/models/hub",
+    };
+    for (const QString &root : roots) {
+        const QString repo = root + "/models--futo-org--futo-swipe/snapshots";
+        QDir sd(repo);
+        if (!sd.exists()) continue;
+        for (const QString &snap : sd.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+            const QString p = repo + "/" + snap + "/honorable_sturgeon/model_fp32.pte";
+            if (QFileInfo::exists(p)) return p;
+        }
+    }
+    return {};
+}
 
 DecoderBridge::DecoderBridge(QObject *parent) : QObject(parent) {
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert("HF_HOME", HF_HOME);
-    env.insert("HF_HUB_DISABLE_PROGRESS_BARS", "1");
-    env.insert("LC_ALL", "C.UTF-8");
-    env.insert("PYTHONUNBUFFERED", "1");
-
-    m_proc = new QProcess(this);
-    m_proc->setProcessEnvironment(env);
-    m_proc->setProcessChannelMode(QProcess::MergedChannels); // stderr+stdout merged -> read via stderr slot? no
-    // We want stderr (READY) and stdout (results) separately:
-    m_proc->setProcessChannelMode(QProcess::SeparateChannels);
-    connect(m_proc, &QProcess::readyReadStandardError, this, &DecoderBridge::onStderr);
-    connect(m_proc, &QProcess::readyReadStandardOutput, this, &DecoderBridge::onStdout);
-    connect(m_proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, &DecoderBridge::onFinished);
-    m_proc->start(PY, QStringList{SERVER});
-}
-
-void DecoderBridge::onStderr() {
-    // futo_server prints "READY" on stderr once the model+dict are loaded.
-    QByteArray b = m_proc->readAllStandardError();
-    if (!m_ready && b.contains("READY")) {
-        m_ready = true;
+    // Load synchronously (~0.1-0.3 s: model load is ~0.1 ms; dictionary load
+    // dominates). Brief, at startup, before the window is interactive.
+    m_eng = std::make_shared<SwipeEngine>(resolveModel().toStdString(),
+                                          "/usr/share/dict/american-english");
+    m_ready = m_eng->ready();
+    // Defer the signal so QML (connected after construction) observes the state.
+    QTimer::singleShot(0, this, [this] {
         emit readyChanged();
-    }
-    fputs(b.constData(), stderr);
+        if (!m_ready) emit decoderDied();
+    });
 }
 
-void DecoderBridge::onStdout() {
-    m_outBuf += m_proc->readAllStandardOutput();
-    int idx;
-    while ((idx = m_outBuf.indexOf('\n')) >= 0) {
-        QByteArray line = m_outBuf.left(idx).trimmed();
-        m_outBuf = m_outBuf.mid(idx + 1);
-        if (line.isEmpty()) continue;
-        QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(line, &err);
-        if (err.error != QJsonParseError::NoError) continue;
-        QJsonObject o = doc.object();
-        QString greedy = o.value("greedy").toString();
-        double ms = o.value("ms").toDouble();
-        QVariantList cands;
-        for (const QJsonValue &v : o.value("candidates").toArray()) {
-            QVariantMap m;
-            QJsonObject co = v.toObject();
-            m["text"] = co.value("text").toString();
-            m["score"] = co.value("score").toDouble();
-            cands.append(m);
-        }
-        emit candidatesReady(greedy, cands, ms);
-    }
-}
-
-void DecoderBridge::onFinished(int, QProcess::ExitStatus) {
-    // futo_server gone (crash / exit). Decode can never return -> tell the UI now,
-    // instead of letting a blind timer guess "timed out" on a merely slow decode.
-    if (m_ready) { m_ready = false; emit readyChanged(); }
-    emit decoderDied();
-}
+DecoderBridge::~DecoderBridge() = default;
 
 void DecoderBridge::decode(const QVariantList &points) {
-    if (!m_ready || !m_proc || m_proc->state() != QProcess::Running) return;
-    QJsonArray arr;
+    if (!m_ready || !m_eng) return;
+    // Stale-discard (ADR-0003): drop a new glide if a decode is still running.
+    bool expected = false;
+    if (!m_busy.compare_exchange_strong(expected, true)) return;
+
+    std::vector<SwipePoint> pts;
+    pts.reserve(points.size());
     for (const QVariant &v : points) {
-        QVariantMap pm = v.toMap();
-        QJsonObject p;
-        p["x"] = pm.value("x").toDouble();
-        p["y"] = pm.value("y").toDouble();
-        p["t"] = pm.value("t").toDouble();
-        arr.append(p);
+        const QVariantMap m = v.toMap();
+        pts.push_back({(float)m.value("x").toDouble(),
+                       (float)m.value("y").toDouble(),
+                       (float)m.value("t").toDouble()});
     }
-    QJsonObject req;
-    req["points"] = arr;
-    QByteArray line = QJsonDocument(req).toJson(QJsonDocument::Compact);
-    line.append('\n');
-    m_proc->write(line);
+    // Capture a shared_ptr to the engine so a worker outlives any destructor.
+    std::shared_ptr<SwipeEngine> eng = m_eng;
+    std::thread([this, eng, pts = std::move(pts)]() {
+        std::string greedy;
+        const auto t0 = std::chrono::steady_clock::now();
+        std::vector<Candidate> cands = eng->decode(pts, &greedy);
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - t0).count();
+        QVariantList ql;
+        for (const Candidate &c : cands) {
+            QVariantMap vm;
+            vm["text"] = QString::fromStdString(c.text);
+            vm["score"] = (double)c.score;
+            ql.append(vm);
+        }
+        const QString g = QString::fromStdString(greedy);
+        QMetaObject::invokeMethod(this, [this, g, ql, ms]() {
+            m_busy = false;
+            emit candidatesReady(g, ql, ms);
+        }, Qt::QueuedConnection);
+    }).detach();
 }

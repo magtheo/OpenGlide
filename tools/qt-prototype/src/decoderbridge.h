@@ -1,32 +1,32 @@
-// DecoderBridge — talks to the persistent futo_server.py over QProcess stdio.
-// QML calls decode(points); emits candidatesReady(greedy, candidates, ms).
+// DecoderBridge — native FUTO decoder (replaces the QProcess/Python futo_server).
+// Owns a SwipeEngine (ExecuTorch C++); decode() runs on a worker thread, serialized
+// by a busy flag (stale-discard per ADR-0003). QML-facing API is unchanged from the
+// Python version: ready / decode / candidatesReady / decoderDied.
 #pragma once
 #include <QObject>
 #include <QVariantList>
-#include <QProcess>
+#include <atomic>
+#include <memory>
+class SwipeEngine;
 
 class DecoderBridge : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool ready READ ready NOTIFY readyChanged)
 public:
     explicit DecoderBridge(QObject *parent = nullptr);
+    ~DecoderBridge();
     bool ready() const { return m_ready; }
 
-    // points: [{x,y,t}, ...] with t in ms. Sent to the server as one JSON line.
+    // points: [{x,y,t}, ...] with t in ms. Returns via candidatesReady().
     Q_INVOKABLE void decode(const QVariantList &points);
 
 signals:
     void readyChanged();
     void candidatesReady(const QString &greedy, const QVariantList &candidates, double ms);
-    void decoderDied();   // futo_server exited unexpectedly — decode can never complete
-
-private slots:
-    void onStderr();
-    void onStdout();
-    void onFinished(int exitCode, QProcess::ExitStatus status);
+    void decoderDied();
 
 private:
-    QProcess *m_proc = nullptr;
+    std::shared_ptr<SwipeEngine> m_eng;     // shared with in-flight worker threads
+    std::atomic<bool> m_busy{false};        // serialize decodes (stale-discard)
     bool m_ready = false;
-    QByteArray m_outBuf;
 };
