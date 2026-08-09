@@ -1,0 +1,22 @@
+// Injector — commits a word via a Linux uinput virtual keyboard (the layout-bound
+// raw-key fallback per ADR-0002). Prototype only: ASCII letters/digits/space;
+// arbitrary UTF-8 needs the input-method/IBus path (not wired here yet).
+#pragma once
+#include <QObject>
+#include <QString>
+
+class Injector : public QObject {
+    Q_OBJECT
+public:
+    explicit Injector(QObject *parent = nullptr);
+    ~Injector();
+    // Type `word` as a sequence of key events into whatever holds keyboard focus.
+    Q_INVOKABLE bool commit(const QString &word);
+
+private:
+    bool setup();                 // create the uinput device once
+    void emitKey(int code, int val);
+    static bool asciiToEvdev(uint32_t cp, int *key, int *shift);
+
+    int m_fd = -1;
+};
