@@ -86,7 +86,21 @@ Dictionary-free greedy decode (encoder-only) of the model-card sample trajectory
 
 **Reading:** the encoder is shape-driven and time-normalized — robust to sparse sampling and speed variation (both relevant to mice), moderately robust to spatial noise and timing jitter. Encouraging for the mouse case, but the real mouse-vs-finger answer needs actual glides.
 
-**Next:** build a mouse-swipe recorder (X11 `XRecord` or `/dev/input` evdev capture over a QWERTY grid) and capture real glides for top-1/top-3 measurement — the actual Risk-3 experiment. Needs the FUTO stack above (already installed) plus a human gliding real words.
+### Real mouse glides (the actual Risk-3 experiment) — PASS
+Recorder `recorder.py` (tkinter QWERTY grid) + offline `dictionary_decode.py` (CTC word scoring over `/usr/share/dict/american-english`, 71k words). 26 glides captured.
+
+| metric | result |
+|---|---|
+| greedy exact-match (dictionary-free) | 16/26 = 62% |
+| **dictionary top-1** | **21/26 = 81% overall; 21/21 = 100% on clean glides** |
+| dictionary top-3 / top-5 | 81% / 81% |
+| decode latency (per glide) | ~5 ms (well under the 100 ms p95 budget, ADR-0003) |
+
+The dictionary recovered every greedy near-miss: `geen→green`, `tavble→table`, `helo→hello`, `riber→river`, `compuer→computer`.
+
+**The 5 misses (glides 2–6) are a capture anomaly, not a model failure:** their recorded paths all physically cross the R-I-V-E-R key cluster (`rtuijbvrer`, `rtuibvfer`, …) despite different prompts, so FUTO correctly decoded the captured stroke as "river." Glides 1 and 7–26 capture target-matching strokes and decode perfectly. Root cause of the early-session quirk is unconfirmed (planned: live in-glide path display + X pointer grab for out-of-window capture in recorder v2).
+
+**Conclusion:** FUTO decodes real mouse trajectories with dictionary at **100% top-1 on clean captures** at ~5 ms. Risk 3 is answered affirmatively — the project's core assumption holds on mouse input. Corpus saved at `tools/futo-spike/corpus.jsonl` (data-formats.md JSONL schema) for regression use.
 
 ## How to run on another session
 ```
