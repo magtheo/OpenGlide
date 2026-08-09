@@ -134,6 +134,20 @@ Mechanism findings:
 - **Engine-desc NULL strings:** every string property must be populated or `register_component`'s GVariant serialization hits `g_variant_new_string(NULL)`. `IBusComponent`'s executable property is `command_line` (not `exec`).
 - **`commit_text` routes only to the focused client's context owned by the *active* engine** — so production use requires the OpenGlide engine to be the selected input method (the user switches to it, like any IME). Raw `uinput`/`XTest` cannot do non-ASCII on a non-matching layout — that asymmetry is exactly ADR-0002's point.
 
+## Native C++ SwipeEngine (ExecuTorch) — replaces futo_server.py ✅
+`tools/native-decode-spike/`: the FUTO encoder runs natively via the ExecuTorch C++ runtime (built from source, v1.4.0, **XNNPACK backend** — the `.pte` is XNNPACK-delegated, ~40 partitions; a portable-only build fails to load it). Full decode ported to C++ (resample → `forward` → greedy + pruned dictionary CTC top-5, overshoot adapter). Wired into the Qt prototype (`DecoderBridge` is now native; `futo_server.py` superseded).
+
+**Result (2026-08-09):**
+- **Warmup eliminated:** model load **0.1 ms** (was ~8 s of Python imports — dominated by `import executorch.runtime` ~5.3 s; the model itself loads in 0.27 s, dict 0.55 s).
+- **Per-decode:** encoder `forward` **7 ms**; full dictionary decode avg **162 ms** (was ~1350 ms in Python) — ~8× faster.
+- **Correctness parity:** `spike` replays Python's exact tensors — native `forward` matches to **3.8e-6** (greedy `computer`). Corpus (controlled, 18 glides) top-1 **17/18 (94%)**, identical to the Python decoder (same lone too-short-stroke miss).
+
+Mechanism / gotchas:
+- The `.pte` returns 3 outputs; emissions are `output[0] = [1,32,65]` (32 timesteps × 65 vocab: 26 letters + blank@64).
+- ExecuTorch C++ runtime isn't packaged — built from source (clone v1.4.0 + build-critical submodules: `third-party/{flatcc,flatbuffers,json,gflags}` + XNNPACK's `{FP16,FXdiv,cpuinfo,pthreadpool}` + `shim`). flatc/flatcc build from the vendored trees (no system flatc). CMake ≥3.24; the `futo-spike` venv provides cmake 4.x and the `torchgen`/`pyyaml` the runtime's codegen step requires (system python lacks `torchgen`).
+- `EXECUTORCH_BUILD_EXTENSION_MODULE` requires `EXECUTORCH_BUILD_EXTENSION_NAMED_DATA_MAP`. Use the high-level `extension::Module` (load → execute("forward", inputs)); tensors via `from_blob(data, sizes, ScalarType)` and `EValue` implicit-converts from a dereferenced `TensorPtr`. Read output with `.template const_data_ptr<float>()`.
+- The decoder's variable cost is dictionary CTC scoring (a 919 ms outlier on a long common-prefix word) — a trie decoder (cf. FUTO swipe-library's `load_trie_simple`) is the future optimization.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make
