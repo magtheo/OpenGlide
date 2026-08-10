@@ -4,9 +4,8 @@ import OpenGlide 1.0
 
 Window {
     id: win
-    width: 980; height: 560; visible: true
-    flags: Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus   // §17: don't steal keyboard focus
-    title: "OpenGlide — Phase 1 prototype (Qt6)"
+    width: 900; height: 360; visible: true
+    flags: Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus | Qt.FramelessWindowHint
     color: pal.bg
 
     // ---- FUTO-inspired palette ----
@@ -28,6 +27,12 @@ Window {
 
     property int wordSwipePx: 60      // leftward px per word deleted (≈ one key width)
 
+    // Keys scale with the window (min of width/height constraints) so they never
+    // squish or overlap when resized. keySize = one cell; the key visual is smaller.
+    property real keySize: Math.max(30, Math.min((width - 24) / 10, (height - 48) / 5.8))
+    property real keyVis: keySize * 0.88
+    property real keyRadius: keySize * 0.20
+
     property var keys: [
         {l:"Q",x:0.05,y:0.167},{l:"W",x:0.15,y:0.167},{l:"E",x:0.25,y:0.167},{l:"R",x:0.35,y:0.167},{l:"T",x:0.45,y:0.167},
         {l:"Y",x:0.55,y:0.167},{l:"U",x:0.65,y:0.167},{l:"I",x:0.75,y:0.167},{l:"O",x:0.85,y:0.167},{l:"P",x:0.95,y:0.167},
@@ -45,6 +50,8 @@ Window {
     property bool lastShort: false
     property string lastWord: ""
     property bool timedOut: false
+    // words in the committed text available to delete (drives the swipe-delete gauge)
+    readonly property int availWords: injected.length ? injected.replace(/^\s+|\s+$/g, "").split(/\s+/).filter(function(w){return w.length;}).length : 0
     property bool decoderDead: false
     property string injected: ""
     property string activeKey: ""        // key under the cursor during a glide (key-pop)
@@ -117,42 +124,47 @@ Window {
         return best;
     }
 
-    // ---- candidate strip ----
+    // ---- top bar: drag handle (frameless move) + candidates + IME status + close ----
     Rectangle {
         id: topbar
         anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
-        height: 64; color: pal.candBar
-        Row {
-            anchors.centerIn: parent; spacing: 8
+        height: keyVis + keySize * 0.30; color: pal.candBar
+        MouseArea { anchors.fill: parent; onPressed: function(mouse) { win.startSystemMove() } }  // drag empty space to move
+        Text {   // IME status (left)
+            anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10
+            text: win.ibusActive ? "OpenGlide IME ✓" : "IME: other"
+            font.pixelSize: keySize * 0.24; color: win.ibusActive ? pal.accent : pal.muted
+        }
+        Row {   // candidates (center)
+            anchors.centerIn: parent; spacing: keySize * 0.10
             Repeater {
                 model: win.candidates
                 Rectangle {
-                    width: 158; height: 44; radius: 22
+                    width: keySize * 2.4; height: keyVis * 0.80; radius: height / 2
                     color: index === 0 ? pal.accent : "#ffffff"
                     border.color: "#dadce0"; border.width: index === 0 ? 0 : 1
                     Text {
                         anchors.centerIn: parent
-                        text: modelData.text; font.bold: index === 0; font.pixelSize: 18
+                        text: modelData.text; font.bold: index === 0; font.pixelSize: keySize * 0.26
                         color: index === 0 ? pal.accentText : pal.keyText
                     }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.correct(index) }
                 }
             }
         }
+        Rectangle {   // close (right)
+            anchors.verticalCenter: parent.verticalCenter; anchors.right: parent.right; anchors.rightMargin: 8
+            width: keyVis * 0.7; height: keyVis * 0.7; radius: height / 2; color: "transparent"
+            Text { anchors.centerIn: parent; text: "×"; font.pixelSize: keySize * 0.40; color: pal.muted }
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Qt.quit() }
+        }
     }
 
     Text {
         id: status
-        anchors.top: topbar.bottom; anchors.horizontalCenter: parent.horizontalCenter; anchors.topMargin: 8
+        anchors.top: topbar.bottom; anchors.horizontalCenter: parent.horizontalCenter; anchors.topMargin: 2
         text: win.stateText()
-        font.pixelSize: 15; color: pal.muted
-    }
-    Text {
-        id: imeStatus
-        anchors.verticalCenter: topbar.verticalCenter
-        anchors.left: parent.left; anchors.leftMargin: 12
-        text: win.ibusActive ? "IME: OpenGlide (UTF-8 ✓)" : "IME: other — Super-space → OpenGlide"
-        font.pixelSize: 12; color: win.ibusActive ? pal.accent : pal.muted
+        font.pixelSize: keySize * 0.22; color: pal.muted
     }
 
     Timer {
@@ -161,25 +173,24 @@ Window {
         onTriggered: if (win.pending) { win.pending = false; win.timedOut = true; win.candidates = [] }
     }
 
-    // ---- keyboard / glide surface ----
+    // ---- keyboard / glide surface (keys scale with the window) ----
     Item {
         id: kb
-        anchors.top: status.bottom; anchors.topMargin: 8
-        anchors.bottom: actionRow.top; anchors.bottomMargin: 8
-        anchors.left: parent.left; anchors.right: parent.right
-        anchors.leftMargin: 20; anchors.rightMargin: 20
+        anchors.top: status.bottom; anchors.topMargin: keySize * 0.06
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: 10 * keySize; height: 3 * keySize
 
         Repeater {
             model: win.keys
             Rectangle {
-                x: modelData.x * kb.width - 32; y: modelData.y * kb.height - 32
-                width: 64; height: 64; radius: 16
+                x: modelData.x * kb.width - keyVis / 2; y: modelData.y * kb.height - keyVis / 2
+                width: keyVis; height: keyVis; radius: keyRadius
                 color: modelData.l === win.activeKey ? pal.keyPop : pal.key
                 z: modelData.l === win.activeKey ? 1 : 0
                 transformOrigin: Item.Center
                 Behavior on scale { NumberAnimation { duration: 70; easing.type: Easing.OutCubic } }
                 scale: modelData.l === win.activeKey ? 1.18 : 1.0
-                Text { anchors.centerIn: parent; text: modelData.l; font.bold: true; font.pixelSize: 22; color: pal.keyText }
+                Text { anchors.centerIn: parent; text: modelData.l; font.bold: true; font.pixelSize: keyVis * 0.44; color: pal.keyText }
             }
         }
 
@@ -190,7 +201,7 @@ Window {
             onPaint: {
                 const ctx = getContext("2d"); ctx.reset();
                 if (pts.length < 2) return;
-                ctx.strokeStyle = pal.accent; ctx.lineWidth = 6; ctx.lineCap = "round"; ctx.lineJoin = "round";
+                ctx.strokeStyle = pal.accent; ctx.lineWidth = keyVis * 0.12; ctx.lineCap = "round"; ctx.lineJoin = "round";
                 ctx.beginPath();
                 ctx.moveTo(pts[0].x * width, pts[0].y * height);
                 for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * width, pts[i].y * height);
@@ -223,33 +234,33 @@ Window {
         Timer { id: tapFlash; interval: 120; onTriggered: if (!surface.swiping) win.activeKey = "" }
     }
 
-    // ---- action row: comma · space · period · backspace(FUTO gesture) ----
+    // ---- action row: comma · space · period · backspace(FUTO gesture) — integrated, scaling ----
     Row {
         id: actionRow
-        anchors.bottom: committedBar.top; anchors.bottomMargin: 8
-        anchors.left: parent.left; anchors.right: parent.right; anchors.leftMargin: 20; anchors.rightMargin: 20
-        height: 54; spacing: 8
+        anchors.top: kb.bottom; anchors.topMargin: keySize * 0.06
+        anchors.horizontalCenter: parent.horizontalCenter
+        height: keyVis; spacing: keySize * 0.12
 
         Rectangle {   // comma
-            width: 92; height: 54; radius: 16; color: pal.action
-            Text { anchors.centerIn: parent; text: ","; font.pixelSize: 24; color: pal.actionText }
+            width: keySize * 1.5; height: keyVis; radius: keyRadius; color: pal.action
+            Text { anchors.centerIn: parent; text: ","; font.pixelSize: keyVis * 0.46; color: pal.actionText }
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.tapPunct(",") }
         }
         Rectangle {   // space (fills the middle)
-            height: 54; radius: 16; color: pal.action
-            width: actionRow.width - 92 - 92 - 132 - 24
-            Text { anchors.centerIn: parent; text: "space"; font.pixelSize: 18; color: pal.actionText }
+            height: keyVis; radius: keyRadius; color: pal.action
+            width: keySize * 5.0
+            Text { anchors.centerIn: parent; text: "space"; font.pixelSize: keyVis * 0.34; color: pal.actionText }
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.tapSpace() }
         }
         Rectangle {   // period
-            width: 92; height: 54; radius: 16; color: pal.action
-            Text { anchors.centerIn: parent; text: "."; font.pixelSize: 24; color: pal.actionText }
+            width: keySize * 1.5; height: keyVis; radius: keyRadius; color: pal.action
+            Text { anchors.centerIn: parent; text: "."; font.pixelSize: keyVis * 0.46; color: pal.actionText }
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.tapPunct(".") }
         }
         Rectangle {   // backspace — tap=char, hold=rapid char, hold+swipe-left=word delete (swipe-right=undo)
-            width: 132; height: 54; radius: 16
+            width: keySize * 2.0; height: keyVis; radius: keyRadius
             color: bs.pressed ? pal.actionHold : pal.action
-            Text { anchors.centerIn: parent; text: "⌫"; font.pixelSize: 26; color: pal.actionText }
+            Text { anchors.centerIn: parent; text: "⌫"; font.pixelSize: keyVis * 0.50; color: pal.actionText }
             MouseArea {
                 id: bs
                 anchors.fill: parent
@@ -290,14 +301,42 @@ Window {
         }
     }
 
+    // swipe-delete gauge: one dot per deletable word; fills right-to-left as you
+    // pull left, so you can see exactly how far each word takes (no more "feel it").
+    Rectangle {
+        id: deleteGauge
+        visible: bs.swiping && win.availWords > 0
+        anchors.bottom: actionRow.top; anchors.bottomMargin: 6
+        anchors.right: parent.right; anchors.rightMargin: keySize * 0.5
+        width: Math.min(parent.width - keySize, keySize * 0.6 + win.availWords * keySize * 0.34)
+        height: keyVis * 0.8; radius: keyRadius
+        color: pal.committedBg; border.color: pal.accent; border.width: 2; z: 5
+        Text {
+            anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: keySize * 0.2
+            text: "−" + bs.wordsDeleted; color: pal.accentText; font.pixelSize: keySize * 0.26; font.bold: true
+        }
+        Row {
+            anchors.verticalCenter: parent.verticalCenter; anchors.right: parent.right; anchors.rightMargin: keySize * 0.2
+            layoutDirection: Qt.RightToLeft; spacing: keySize * 0.12
+            Repeater {
+                model: win.availWords
+                Rectangle {
+                    width: keySize * 0.22; height: keySize * 0.22; radius: width / 2
+                    color: index < bs.wordsDeleted ? pal.accent : "#6b7178"
+                }
+            }
+        }
+    }
+
     Rectangle {
         id: committedBar
-        anchors.bottom: parent.bottom; anchors.left: parent.left; anchors.right: parent.right
-        height: 44; color: pal.committedBg
+        anchors.top: actionRow.bottom; anchors.topMargin: keySize * 0.06
+        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+        color: pal.committedBg
         Text {
             anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 12
             text: "committed: " + (win.injected.length ? win.injected.replace(/\s+$/,"") : "—")
-            color: pal.committedText; font.pixelSize: 15; font.family: "monospace"
+            color: pal.committedText; font.pixelSize: keySize * 0.24; font.family: "monospace"
         }
     }
 
