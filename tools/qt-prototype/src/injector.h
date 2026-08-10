@@ -16,10 +16,13 @@ public:
     Q_INVOKABLE void backspace(int n);
     // Type a single character (letter/digit/space/comma/period/…) — no trailing space.
     Q_INVOKABLE void typeChar(const QString &ch);
+    // OpenGlide is the active IME -> commits route via IBus (UTF-8); else uinput fallback.
+    Q_INVOKABLE bool ibusActive() const;
 
 private:
     bool setup();                 // create the uinput device once
     void emitKey(int code, int val);
+    void rawType(const QString &ch);   // uinput emit of one ASCII char (no IBus dispatch)
     static bool asciiToEvdev(uint32_t cp, int *key, int *shift);
 
     int m_fd = -1;

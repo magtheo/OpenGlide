@@ -41,9 +41,11 @@ target app (spec §17) — confirmed on XWayland.
   ~79 ms dict decode avg (worst-case ~350 ms; was ~1350 ms with Python). Decode
   is a prefix-shared **trie CTC** forward — one DFS over the dictionary trie,
   exact (~1.8× faster than per-word scoring).
-- Injection is **ASCII-only** via `uinput` (raw keys are layout-bound, ADR-0002).
-  Arbitrary UTF-8 needs the `input-method-v2`/IBus path (validated separately in
-  `../ibus-engine-probe/`, not wired here).
+- Injection: **IBus commit** (primary) — the app hosts a pass-through `openglide`
+  engine, self-activates it on startup, forwards physical keys, and commits via
+  `ibus_engine_commit_text` (UTF-8, layout-independent; ADR-0002). Verified
+  `æøå 🫐` into a focused sink. `uinput` (layout-bound, ASCII) is the fallback
+  (`src/ibus_engine.{c,h}`).
 - Out-of-window capture depends on Qt's mouse-grab semantics on the platform.
 
 ## Lessons baked in

@@ -49,6 +49,7 @@ Window {
     property string injected: ""
     property string activeKey: ""        // key under the cursor during a glide (key-pop)
     property int warmupSecs: 0
+    property bool ibusActive: false
 
     function stateText() {
         if (decoderDead) return "decoder stopped — restart the app";
@@ -60,6 +61,7 @@ Window {
         return `top-1 “${candidates[0].text}” committed   (greedy “${greedyText}”, ${decMs.toFixed(0)} ms)`;
     }
     Timer { interval: 1000; repeat: true; running: !decoder.ready && visible; onTriggered: warmupSecs += 1 }
+    Timer { interval: 800; repeat: true; running: visible; onTriggered: ibusActive = injector.ibusActive() }
 
     // ---- injection ops (each keeps `injected` in sync with the target field) ----
     function commitDecoded(word) { injector.commit(word); injected += word + " "; lastWord = word; }
@@ -141,6 +143,13 @@ Window {
         anchors.top: topbar.bottom; anchors.horizontalCenter: parent.horizontalCenter; anchors.topMargin: 8
         text: win.stateText()
         font.pixelSize: 15; color: pal.muted
+    }
+    Text {
+        id: imeStatus
+        anchors.verticalCenter: topbar.verticalCenter
+        anchors.left: parent.left; anchors.leftMargin: 12
+        text: win.ibusActive ? "IME: OpenGlide (UTF-8 ✓)" : "IME: other — Super-space → OpenGlide"
+        font.pixelSize: 12; color: win.ibusActive ? pal.accent : pal.muted
     }
 
     Timer {

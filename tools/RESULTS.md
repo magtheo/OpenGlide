@@ -148,6 +148,17 @@ Mechanism / gotchas:
 - `EXECUTORCH_BUILD_EXTENSION_MODULE` requires `EXECUTORCH_BUILD_EXTENSION_NAMED_DATA_MAP`. Use the high-level `extension::Module` (load → execute("forward", inputs)); tensors via `from_blob(data, sizes, ScalarType)` and `EValue` implicit-converts from a dereferenced `TensorPtr`. Read output with `.template const_data_ptr<float>()`.
 - **Trie CTC decode (2026-08-10):** replaced per-word CTC scoring with a single forward DP over a dictionary prefix trie — each node computes its letter/blank α from its parent's (prefix sharing), pruned to the greedy-derived `alph` set + length band. Exact port (corpus ranking byte-identical to the per-word scorer), ~1.8× faster avg (144→79 ms) and ~2.4× on the outlier (840→350 ms); `lae` uses the single-`exp` `log1p` form. Next lever: beam pruning over the trie to bound the candidate set.
 
+## IBus commit — wired into the Qt prototype ✅
+`tools/qt-prototype/src/ibus_engine.{c,h}`: the app hosts the OpenGlide IBus engine itself (no installed component, no separate engine binary). On startup it connects to ibus-daemon, registers a pass-through `openglide` engine (forwards physical keys so typing still works while it's active), and self-activates it as the global engine via in-process `ibus_bus_set_global_engine_async`. Glide decodes commit via `og_ibus_commit` → `ibus_engine_commit_text` (UTF-8, layout-independent); `uinput` is the layout-bound fallback. The previous engine is restored on shutdown.
+
+**Result (2026-08-10): EXACT MATCH.** With a focused GTK sink (`GTK_IM_MODULE=ibus`), the prototype's `og_ibus_commit("æøå 🫐 openglide")` lands verbatim in the buffer (`/tmp/og_ibus_out.txt` == `æøå 🫐 openglide`). The full ADR-0002 primary path works from the app.
+
+Mechanism findings:
+- **External `ibus engine openglide` fails** ("Cannot find engine") — a runtime `register_component` isn't visible to ibus-daemon's external `SetGlobalEngine` resolver. But the **in-process** `set_global_engine_async` on the registering connection works (the probe's proven path) — so the app self-activates.
+- **GLib/Qt event loops don't mix** — IBus runs in its own thread with a dedicated `GMainContext` (the bus is bound to it via `push_thread_default` before `ibus_bus_new`). Cross-thread commits marshal via `g_main_context_invoke` (synchronous across threads); when already on the IBus thread it dispatches inline (same-thread `invoke` only queues).
+- **Pass-through key forwarding** (`ibus_engine_forward_key_event` in `process_key_event`) is required so the active engine doesn't absorb physical keys — otherwise self-activating would break normal typing.
+- **Commit at `enable`, not on a timer** — focus can drift between `enable` and a delayed commit (the engine disables), so the self-test commits inline at `enable` (the probe's timing).
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make

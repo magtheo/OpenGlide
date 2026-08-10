@@ -23,7 +23,7 @@ Core technical assumptions are now **measured, not guessed**:
 | Gesture capture (§4.2/6.2/6.3) | ✅ spec-aligned `SwipeSurface` (pointer grab, unclamped) — 9/9 | tools/swipe-capture |
 | **Phase 1 prototype** | ✅ **end-to-end working** — glide → decode → injected into a real app (XWayland) | tools/qt-prototype, RESULTS.md |
 | Native C++ decoder | ✅ built + live (**trie CTC**) — ExecuTorch C++ (XNNPACK); 0.1 ms load, 7 ms forward, ~79 ms decode avg / ~350 ms worst-case (was ~8 s / ~1350 ms); 94% corpus = Python parity | tools/native-decode-spike, RESULTS.md |
-| UTF-8 via IBus (GNOME) | ✅ validated — `ibus_engine_commit_text` lands exact UTF-8, focus retained | tools/ibus-engine-probe, ADR-0002 |
+| UTF-8 via IBus (GNOME) | ✅ **wired into prototype** — hosts a pass-through engine, self-activates; `og_ibus_commit` lands exact UTF-8 (verified `æøå 🫐`); uinput fallback | tools/qt-prototype/src/ibus_engine.c, RESULTS.md |
 | Licensing | ✅ preliminary GO (GPL-3.0-only lib + commercial-permissive weights) | ADR-0001 |
 | Decisions / contracts | ✅ ADR-0001..0004, versioned data-formats | decisions/, data-formats.md |
 
@@ -45,7 +45,7 @@ The spec's Phase 1 flow works end-to-end: hold LMB → glide → FUTO decodes �
 
 Remaining to harden Phase 1 toward product quality:
 - ~~Native C++ `SwipeEngine`~~ ✅ done + live in the Qt prototype (`tools/native-decode-spike`): ExecuTorch C++ runtime (XNNPACK — the `.pte` is delegated) runs the FUTO encoder natively; full decode ported (resample → forward → greedy + dict CTC + overshoot adapter). **0.1 ms** model load (was ~8 s warmup), **7 ms** forward, **~79 ms** avg decode (was ~1350 ms); corpus top-1 94% = Python parity. A prefix-shared **trie CTC** forward (one DFS over the dictionary trie, exact — identical ranking to per-word scoring) cut decode ~1.8× avg and the outlier 840→350 ms; remaining cost is the `alph`+length candidate set.
-- UTF-8 injection via IBus — primary path **validated** (`tools/ibus-engine-probe`; ADR-0002 gate met). Remaining: wire it into the Qt prototype (engine service + D-Bus commit, `uinput` fallback) and the `input-method-v2` path for wlroots compositors.
+- ~~UTF-8 injection via IBus~~ ✅ **wired into the Qt prototype** (`tools/qt-prototype/src/ibus_engine.{c,h}`): the app hosts a pass-through IBus engine (`openglide`), self-activates it as the global engine on startup (in-process `set_global_engine_async` — external `SetGlobalEngine` can't resolve a runtime engine), forwards physical keys so typing still works, and commits via `og_ibus_commit` → `ibus_engine_commit_text` (UTF-8, layout-independent) with `uinput` fallback. Verified: `æøå 🫐 openglide` lands exactly in a focused GTK sink; previous engine restored on shutdown. Remaining: the `input-method-v2` path for wlroots compositors.
 - ~~One-click candidate correction; decoder overshoot adapter (§6.3); watchdog for the `pending` state~~ ✅ done (`tools/qt-prototype`): candidate click → backspace + recommit; overshoot adapter (now in the native `SwipeEngine`) drops trailing OOB + clamps to `[0,1]`; a 20 s stuck-backstop + `decoderDied` (fires if the engine fails to load) keep the status state machine from sticking.
 - Out-of-window capture under Qt's mouse-grab on each platform.
 

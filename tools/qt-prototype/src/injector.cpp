@@ -1,4 +1,6 @@
 #include "injector.h"
+#include "ibus_engine.h"
+#include <QByteArray>
 #include <linux/uinput.h>
 #include <linux/input.h>
 #include <fcntl.h>
@@ -16,8 +18,9 @@ static void write_all(int fd, const void *buf, size_t n) {
     (void)r;  // best-effort; device may be tearing down
 }
 
-Injector::Injector(QObject *parent) : QObject(parent) { setup(); }
+Injector::Injector(QObject *parent) : QObject(parent) { setup(); og_ibus_start(); }
 Injector::~Injector() {
+    og_ibus_shutdown();   /* restore the user's previous IBus engine */
     if (m_fd >= 0) { ioctl(m_fd, UI_DEV_DESTROY); close(m_fd); }
 }
 
@@ -78,7 +81,7 @@ bool Injector::setup() {
     return true;
 }
 
-void Injector::typeChar(const QString &ch) {
+void Injector::rawType(const QString &ch) {
     if (m_fd < 0 && !setup()) return;
     if (ch.isEmpty()) return;
     int key, shift;
@@ -90,12 +93,26 @@ void Injector::typeChar(const QString &ch) {
     QThread::usleep(2000);
 }
 
+void Injector::typeChar(const QString &ch) {
+    if (ch.isEmpty()) return;
+    if (og_ibus_active()) { og_ibus_commit(ch.toUtf8().constData()); return; }
+    rawType(ch);
+}
+
 bool Injector::commit(const QString &word) {
+    // ADR-0002: commit via IBus (UTF-8, layout-independent) when OpenGlide is the
+    // active IME; fall back to raw-key uinput (layout-bound, ASCII).
+    if (og_ibus_active()) {
+        QByteArray s = (word + QChar(' ')).toUtf8();   // trailing separator (spec §9.2)
+        if (og_ibus_commit(s.constData())) return true;
+    }
     if (m_fd < 0 && !setup()) return false;
-    for (const QChar qc : word) typeChar(QString(qc));
-    typeChar(" ");   // trailing separator (spec §9.2)
+    for (const QChar qc : word) rawType(QString(qc));
+    rawType(" ");
     return true;
 }
+
+bool Injector::ibusActive() const { return og_ibus_active(); }
 
 void Injector::backspace(int n) {
     if (m_fd < 0 && !setup()) return;

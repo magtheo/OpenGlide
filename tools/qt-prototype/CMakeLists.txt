@@ -1,11 +1,15 @@
 cmake_minimum_required(VERSION 3.24)
-project(openglide-qt LANGUAGES CXX)
+project(openglide-qt LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick)
 qt_standard_project_setup()
+
+# ---- IBus (GNOME UTF-8 commit path, ADR-0002) ----
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(IBUS REQUIRED ibus-1.0)
 
 # ---- native FUTO decoder: build ExecuTorch (XNNPACK — the .pte is delegated) ----
 set(EXECUTORCH_BUILD_XNNPACK          ON CACHE BOOL "" FORCE)
@@ -28,9 +32,10 @@ qt_add_executable(openglide-qt
     src/swipesurface.cpp src/swipesurface.h
     src/decoderbridge.cpp src/decoderbridge.h
     src/injector.cpp src/injector.h
+    src/ibus_engine.c src/ibus_engine.h
     ${SPIKE_DIR}/swipe_engine.cpp ${SPIKE_DIR}/swipe_engine.h
 )
 qt_add_resources(openglide-qt "qml" PREFIX "/" FILES main.qml)
 
-target_include_directories(openglide-qt PRIVATE ${SPIKE_DIR})
-target_link_libraries(openglide-qt PRIVATE Qt6::Core Qt6::Gui Qt6::Quick ${ET_LIBS})
+target_include_directories(openglide-qt PRIVATE ${SPIKE_DIR} ${IBUS_INCLUDE_DIRS})
+target_link_libraries(openglide-qt PRIVATE Qt6::Core Qt6::Gui Qt6::Quick ${ET_LIBS} ${IBUS_LIBRARIES})
