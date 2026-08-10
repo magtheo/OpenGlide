@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <utility>
 
 struct SwipePoint { float x, y, t; };          // t in ms
 struct Candidate { std::string text; float score; };
@@ -23,16 +24,21 @@ public:
                                   std::string* greedy_out = nullptr);
 
 private:
-    struct DictWord {
-        std::string s;
-        std::vector<int> labels;     // CTC label sequence (with BLANKs)
-        std::vector<unsigned char> skip; // skip[i] = labels[i]!=labels[i-2]
-        std::vector<int> idxset;     // unique letter indices (for subset filter)
-        int len;
-    };
-
     std::unique_ptr<executorch::extension::Module> mod_;
-    std::vector<DictWord> dict_;
+    size_t n_words_ = 0;          // dict size (trie word-ends), for the ready log
+
+    // --- Prefix-shared CTC decode over a dictionary trie ---
+    struct TrieNode {
+        int8_t letter = -1;          // 0-25; -1 for root
+        bool is_word = false;
+        std::vector<std::unique_ptr<TrieNode>> children;  // find-or-create by letter
+    };
+    std::unique_ptr<TrieNode> root_;
+    TrieNode* trie_child(TrieNode* parent, int8_t letter);   // find-or-create
+    void score_dfs(TrieNode* node, const double* pL, const double* pB,
+                   bool hasPL, int8_t pletter, const float* em, const bool* alph,
+                   int glen, int maxwlen, std::string& prefix,
+                   std::vector<std::pair<float, std::string>>& out);
     bool ready_ = false;
 
     // constant key-centers tensor data [64][2] + mask [64]
@@ -40,5 +46,7 @@ private:
     bool mask_[64];
 
     void load_dict(const std::string& path);
+    // trie CTC forward (exact port of ctc_score, prefix-shared): walks the trie
+    // computing each node's letter/blank alpha from its parent's, pruned to alph.
     const float* run_forward(const float feats[2 * 64]);  // -> [T*65] emissions (owned in mod_)
 };

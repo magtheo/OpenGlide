@@ -139,14 +139,14 @@ Mechanism findings:
 
 **Result (2026-08-09):**
 - **Warmup eliminated:** model load **0.1 ms** (was ~8 s of Python imports — dominated by `import executorch.runtime` ~5.3 s; the model itself loads in 0.27 s, dict 0.55 s).
-- **Per-decode:** encoder `forward` **7 ms**; full dictionary decode avg **162 ms** (was ~1350 ms in Python) — ~8× faster.
+- **Per-decode:** encoder `forward` **7 ms**; dictionary decode avg **~79 ms** (worst-case ~350 ms on long common-prefix words; was ~1350 ms / 919 ms outlier in Python) — ~17× faster avg.
 - **Correctness parity:** `spike` replays Python's exact tensors — native `forward` matches to **3.8e-6** (greedy `computer`). Corpus (controlled, 18 glides) top-1 **17/18 (94%)**, identical to the Python decoder (same lone too-short-stroke miss).
 
 Mechanism / gotchas:
 - The `.pte` returns 3 outputs; emissions are `output[0] = [1,32,65]` (32 timesteps × 65 vocab: 26 letters + blank@64).
 - ExecuTorch C++ runtime isn't packaged — built from source (clone v1.4.0 + build-critical submodules: `third-party/{flatcc,flatbuffers,json,gflags}` + XNNPACK's `{FP16,FXdiv,cpuinfo,pthreadpool}` + `shim`). flatc/flatcc build from the vendored trees (no system flatc). CMake ≥3.24; the `futo-spike` venv provides cmake 4.x and the `torchgen`/`pyyaml` the runtime's codegen step requires (system python lacks `torchgen`).
 - `EXECUTORCH_BUILD_EXTENSION_MODULE` requires `EXECUTORCH_BUILD_EXTENSION_NAMED_DATA_MAP`. Use the high-level `extension::Module` (load → execute("forward", inputs)); tensors via `from_blob(data, sizes, ScalarType)` and `EValue` implicit-converts from a dereferenced `TensorPtr`. Read output with `.template const_data_ptr<float>()`.
-- The decoder's variable cost is dictionary CTC scoring (a 919 ms outlier on a long common-prefix word) — a trie decoder (cf. FUTO swipe-library's `load_trie_simple`) is the future optimization.
+- **Trie CTC decode (2026-08-10):** replaced per-word CTC scoring with a single forward DP over a dictionary prefix trie — each node computes its letter/blank α from its parent's (prefix sharing), pruned to the greedy-derived `alph` set + length band. Exact port (corpus ranking byte-identical to the per-word scorer), ~1.8× faster avg (144→79 ms) and ~2.4× on the outlier (840→350 ms); `lae` uses the single-`exp` `log1p` form. Next lever: beam pruning over the trie to bound the candidate set.
 
 ## How to run on another session
 ```

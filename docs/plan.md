@@ -22,7 +22,7 @@ Core technical assumptions are now **measured, not guessed**:
 | Focus preservation | ✅ `WindowDoesNotAcceptFocus` keeps keyboard focus on XWayland; override-redirect is the fallback | RESULTS.md |
 | Gesture capture (§4.2/6.2/6.3) | ✅ spec-aligned `SwipeSurface` (pointer grab, unclamped) — 9/9 | tools/swipe-capture |
 | **Phase 1 prototype** | ✅ **end-to-end working** — glide → decode → injected into a real app (XWayland) | tools/qt-prototype, RESULTS.md |
-| Native C++ decoder | ✅ built + live in prototype — ExecuTorch C++ (XNNPACK); 0.1 ms load, 7 ms forward, 162 ms decode (was ~8 s / ~1350 ms); 94% corpus = Python parity | tools/native-decode-spike, RESULTS.md |
+| Native C++ decoder | ✅ built + live (**trie CTC**) — ExecuTorch C++ (XNNPACK); 0.1 ms load, 7 ms forward, ~79 ms decode avg / ~350 ms worst-case (was ~8 s / ~1350 ms); 94% corpus = Python parity | tools/native-decode-spike, RESULTS.md |
 | UTF-8 via IBus (GNOME) | ✅ validated — `ibus_engine_commit_text` lands exact UTF-8, focus retained | tools/ibus-engine-probe, ADR-0002 |
 | Licensing | ✅ preliminary GO (GPL-3.0-only lib + commercial-permissive weights) | ADR-0001 |
 | Decisions / contracts | ✅ ADR-0001..0004, versioned data-formats | decisions/, data-formats.md |
@@ -44,7 +44,7 @@ Probes, FUTO validation, ADRs, data contracts. (`tools/` + `docs/decisions/` + `
 The spec's Phase 1 flow works end-to-end: hold LMB → glide → FUTO decodes → top word injected into a focused app (`tools/qt-prototype`). Verified on XWayland — words reach Firefox/editor/terminal; `WindowDoesNotAcceptFocus` preserves keyboard focus (§17).
 
 Remaining to harden Phase 1 toward product quality:
-- ~~Native C++ `SwipeEngine`~~ ✅ done + live in the Qt prototype (`tools/native-decode-spike`): ExecuTorch C++ runtime (XNNPACK — the `.pte` is delegated) runs the FUTO encoder natively; full decode ported (resample → forward → greedy + dict CTC + overshoot adapter). **0.1 ms** model load (was ~8 s warmup), **7 ms** forward, **162 ms** avg decode (was ~1350 ms); corpus top-1 94% = Python parity. Variable cost is dict CTC scoring (future: trie decoder).
+- ~~Native C++ `SwipeEngine`~~ ✅ done + live in the Qt prototype (`tools/native-decode-spike`): ExecuTorch C++ runtime (XNNPACK — the `.pte` is delegated) runs the FUTO encoder natively; full decode ported (resample → forward → greedy + dict CTC + overshoot adapter). **0.1 ms** model load (was ~8 s warmup), **7 ms** forward, **~79 ms** avg decode (was ~1350 ms); corpus top-1 94% = Python parity. A prefix-shared **trie CTC** forward (one DFS over the dictionary trie, exact — identical ranking to per-word scoring) cut decode ~1.8× avg and the outlier 840→350 ms; remaining cost is the `alph`+length candidate set.
 - UTF-8 injection via IBus — primary path **validated** (`tools/ibus-engine-probe`; ADR-0002 gate met). Remaining: wire it into the Qt prototype (engine service + D-Bus commit, `uinput` fallback) and the `input-method-v2` path for wlroots compositors.
 - ~~One-click candidate correction; decoder overshoot adapter (§6.3); watchdog for the `pending` state~~ ✅ done (`tools/qt-prototype`): candidate click → backspace + recommit; overshoot adapter (now in the native `SwipeEngine`) drops trailing OOB + clamps to `[0,1]`; a 20 s stuck-backstop + `decoderDied` (fires if the engine fails to load) keep the status state machine from sticking.
 - Out-of-window capture under Qt's mouse-grab on each platform.

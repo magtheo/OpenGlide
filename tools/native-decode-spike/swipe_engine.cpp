@@ -26,11 +26,11 @@ static constexpr int VOCAB = 65;    // 26 letters + blank@64
 static constexpr int BLANK = 64;
 static constexpr double NEG = -1e18;
 
-static double lae(double a, double b) {  // logaddexp
+static double lae(double a, double b) {  // logaddexp; exact: max + log1p(exp(-|d|))
     if (a <= NEG) return b;
     if (b <= NEG) return a;
-    double m = std::max(a, b);
-    return m + std::log(std::exp(a - m) + std::exp(b - m));
+    if (a < b) std::swap(a, b);  // a >= b
+    return a + std::log1p(std::exp(b - a));
 }
 static float interp1(float q, const std::vector<float>& x, const std::vector<float>& y) {
     int n = (int)x.size();
@@ -59,11 +59,12 @@ SwipeEngine::SwipeEngine(const std::string& model_path, const std::string& dict_
     if (mod_->load() != Error::Ok) { std::fprintf(stderr, "[swipe] model load failed\n"); return; }
     load_dict(dict_path);
     ready_ = true;
-    std::fprintf(stderr, "[swipe] ready: %zu dict words\n", dict_.size());
+    std::fprintf(stderr, "[swipe] ready: %zu dict words\n", n_words_);
 }
 
 void SwipeEngine::load_dict(const std::string& path) {
     std::ifstream f(path);
+    root_ = std::make_unique<TrieNode>();
     std::string w;
     while (std::getline(f, w)) {
         // trim
@@ -75,16 +76,11 @@ void SwipeEngine::load_dict(const std::string& path) {
         bool ok = true;
         for (char c : w) if (c < 'a' || c > 'z') { ok = false; break; }
         if (!ok) continue;
-        DictWord d;
-        d.s = w; d.len = (int)w.size();
-        d.labels.push_back(BLANK);
-        for (char c : w) { d.labels.push_back(c - 'a'); d.labels.push_back(BLANK); }
-        d.skip.resize(d.labels.size(), 0);
-        for (size_t i = 2; i < d.labels.size(); i++) d.skip[i] = (d.labels[i] != d.labels[i - 2]);
-        int seen[26] = {0};
-        for (char c : w) seen[c - 'a'] = 1;
-        for (int i = 0; i < 26; i++) if (seen[i]) d.idxset.push_back(i);
-        dict_.push_back(std::move(d));
+        // trie path (prefix-shared CTC decode)
+        TrieNode* tn = root_.get();
+        for (char c : w) tn = trie_child(tn, (int8_t)(c - 'a'));
+        tn->is_word = true;
+        n_words_++;
     }
 }
 
@@ -128,23 +124,48 @@ const float* SwipeEngine::run_forward(const float feats[2 * 64]) {
     return outs[0].toTensor().template const_data_ptr<float>();
 }
 
-static double ctc_score(const float* em, const std::vector<int>& labels, const std::vector<unsigned char>& skip) {
-    int L = (int)labels.size();
-    std::vector<double> prev(L, NEG), cur(L);
-    prev[0] = em[labels[0]];
-    if (L > 1) prev[1] = em[labels[1]];
+SwipeEngine::TrieNode* SwipeEngine::trie_child(TrieNode* p, int8_t letter) {
+    for (auto& c : p->children)
+        if (c->letter == letter) return c.get();
+    auto n = std::make_unique<TrieNode>();
+    n->letter = letter;
+    TrieNode* raw = n.get();
+    p->children.push_back(std::move(n));
+    return raw;
+}
+
+void SwipeEngine::score_dfs(TrieNode* node, const double* pL, const double* pB,
+                            bool hasPL, int8_t pletter, const float* em,
+                            const bool* alph, int glen, int maxwlen,
+                            std::string& prefix,
+                            std::vector<std::pair<float, std::string>>& out) {
+    const int8_t letter = node->letter;
+    // CTC forward alpha for this node's letter (aL) and the blank after it (aB).
+    // Exact port of ctc_score's recurrence, but each node reuses its parent's
+    // already-computed prefix alpha (pL=parent letter, pB=parent blank; first-
+    // letter nodes get pB=leading-blank alpha B0 and no skip).
+    double aL[T_OUT], aB[T_OUT];
+    aL[0] = hasPL ? NEG : (double)em[letter];
     for (int t = 1; t < T_OUT; t++) {
-        for (int i = 0; i < L; i++) {
-            double stay = prev[i];
-            double p1 = (i >= 1) ? prev[i - 1] : NEG;
-            double p2 = (i >= 2 && skip[i]) ? prev[i - 2] : NEG;
-            cur[i] = lae(lae(stay, p1), p2) + em[t * VOCAB + labels[i]];
-        }
-        std::swap(prev, cur);
+        double fp2 = (hasPL && letter != pletter) ? pL[t - 1] : NEG;  // CTC skip
+        aL[t] = lae(lae(aL[t - 1], pB[t - 1]), fp2) + em[t * VOCAB + letter];
     }
-    double total = prev[L - 1];
-    if (L > 1) total = lae(total, prev[L - 2]);
-    return total;
+    aB[0] = NEG;
+    for (int t = 1; t < T_OUT; t++)
+        aB[t] = lae(aB[t - 1], aL[t - 1]) + em[t * VOCAB + BLANK];
+    if (node->is_word) {
+        int wlen = (int)prefix.size();
+        if (std::abs(wlen - glen) <= 3)
+            out.push_back({(float)lae(aB[T_OUT - 1], aL[T_OUT - 1]), prefix});
+    }
+    if ((int)prefix.size() < maxwlen) {
+        for (auto& c : node->children) {
+            if (!alph[c->letter]) continue;
+            prefix.push_back((char)('a' + c->letter));
+            score_dfs(c.get(), aL, aB, true, letter, em, alph, glen, maxwlen, prefix, out);
+            prefix.pop_back();
+        }
+    }
 }
 
 std::vector<Candidate> SwipeEngine::decode(const std::vector<SwipePoint>& pts, std::string* greedy_out) {
@@ -182,13 +203,18 @@ std::vector<Candidate> SwipeEngine::decode(const std::vector<SwipePoint>& pts, s
     if (greedy_out) *greedy_out = g;
 
     int glen = (int)g.size();
+    int maxwlen = glen + 3;
+    // Leading-blank CTC alpha (B0): the only label reachable at t=0 alongside the
+    // first letter; it only stays (no prior label to advance from).
+    double aB0[T_OUT];
+    aB0[0] = em[BLANK];
+    for (int t = 1; t < T_OUT; t++) aB0[t] = aB0[t - 1] + em[t * VOCAB + BLANK];
     std::vector<std::pair<float, std::string>> scored;
-    for (const auto& d : dict_) {
-        if (std::abs(d.len - glen) > 3) continue;
-        bool subset = true;
-        for (int idx : d.idxset) if (!alph[idx]) { subset = false; break; }
-        if (!subset) continue;
-        scored.push_back({(float)ctc_score(em, d.labels, d.skip), d.s});
+    std::string prefix;
+    for (auto& c : root_->children) {
+        if (!alph[c->letter]) continue;
+        prefix.assign(1, (char)('a' + c->letter));
+        score_dfs(c.get(), nullptr, aB0, false, (int8_t)-1, em, alph, glen, maxwlen, prefix, scored);
     }
     std::sort(scored.begin(), scored.end(),
               [](const auto& a, const auto& b) { return a.first > b.first; });

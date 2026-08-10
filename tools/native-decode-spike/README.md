@@ -44,9 +44,10 @@ MODEL=$(ls ../../tools/futo-spike/models/hub/models--futo-org--futo-swipe/snapsh
 - corpus (controlled, 18 glides): **top-1 17/18 (94%)** — identical to the Python
   decoder (same lone too-short-stroke miss).
 - latency: model load **0.1 ms** (was ~8 s warmup); encoder `forward` **7 ms**;
-  full dict decode avg **162 ms** (was ~1350 ms). The variable cost is dictionary
-  CTC scoring (one 919 ms outlier on a long common-prefix word); a trie decoder is
-  the future optimization.
+  dict decode avg **~79 ms**, worst-case ~350 ms (was ~1350 ms / 919 ms outlier).
+  Decode is a prefix-shared **trie CTC** forward — one DFS over the dictionary
+  trie, each node reusing its parent's α (exact: byte-identical ranking to
+  per-word scoring, ~1.8× faster).
 
 ## Notes
 - The `.pte` returns 3 outputs; emissions are `output[0]` = `[1,32,65]`

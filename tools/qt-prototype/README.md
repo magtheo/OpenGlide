@@ -38,8 +38,9 @@ target app (spec §17) — confirmed on XWayland.
 
 ## Prototype scope / known limits (deliberate)
 - Decoder is **native C++** (`SwipeEngine`): ~0.1 ms model load, ~7 ms forward,
-  ~162 ms full dict decode (was ~8 s warmup / ~1350 ms with Python). The variable
-  cost is dictionary CTC scoring — a trie decoder is the future optimization.
+  ~79 ms dict decode avg (worst-case ~350 ms; was ~1350 ms with Python). Decode
+  is a prefix-shared **trie CTC** forward — one DFS over the dictionary trie,
+  exact (~1.8× faster than per-word scoring).
 - Injection is **ASCII-only** via `uinput` (raw keys are layout-bound, ADR-0002).
   Arbitrary UTF-8 needs the `input-method-v2`/IBus path (validated separately in
   `../ibus-engine-probe/`, not wired here).
