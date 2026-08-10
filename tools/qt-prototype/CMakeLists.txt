@@ -32,6 +32,7 @@ qt_add_executable(openglide-qt
     src/swipesurface.cpp src/swipesurface.h
     src/decoderbridge.cpp src/decoderbridge.h
     src/injector.cpp src/injector.h
+    src/appsettings.cpp src/appsettings.h
     src/ibus_engine.c src/ibus_engine.h
     ${SPIKE_DIR}/swipe_engine.cpp ${SPIKE_DIR}/swipe_engine.h
 )

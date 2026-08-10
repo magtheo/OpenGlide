@@ -13,6 +13,10 @@
 
 struct SwipePoint { float x, y, t; };          // t in ms
 struct Candidate { std::string text; float score; };
+// One key of the glide geometry, normalized to the letter block (data-formats.md
+// `languages/<lang>/layout.json`). The decoder must score against the keys that
+// are actually on screen (spec §7.2) — hence set_layout/layout below.
+struct KeyCenter { char label; float x, y; };
 
 class SwipeEngine {
 public:
@@ -23,6 +27,17 @@ public:
                 const std::string& freq_path = "",
                 const std::string& user_freq_path = "");
     bool ready() const { return ready_; }
+
+    // Install the keyboard geometry the decoder scores against (spec §7.2). Needs
+    // exactly the 26 letters a-z, once each (duplicates are a FUTO constraint —
+    // data-formats.md); on any violation the previous geometry is kept and this
+    // returns false, so a malformed layout.json degrades to the built-in QWERTY
+    // rather than silently scoring against a broken keyboard.
+    bool set_layout(const std::vector<KeyCenter>& keys);
+    // The geometry currently in force, a-z order. This is the single runtime
+    // source of truth — the UI reads it back rather than keeping its own copy.
+    std::vector<KeyCenter> layout() const;
+
     // Weight of the word-frequency prior (score += lambda * log(count)); 0 = pure CTC.
     void set_freq_lambda(double l) { freq_lambda_ = l; }
     // Personalization: record that the user used/chose `word` (bumps its count),

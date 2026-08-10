@@ -50,8 +50,22 @@ target app (spec §17) — confirmed on XWayland.
 - **Personalization**: per-user word counts (`~/.local/share/openglide/user_freq.tsv`)
   boost your own words in decode (score += λ·log(count+1), λ=2.0) — learns YOUR
   vocabulary (the right "learn common words"). Bumped on glide commit + correction.
-- **Layout**: frameless (drag the top bar to move, × to close), keys scale on
-  resize (no squish/overlap), integrated grid, + a swipe-delete gauge (dots per word).
+- **Layout (ADR-0005)**: one grid unit `u = contentWidth/10` drives every element,
+  so the letter block spans the full width (no letterbox) and the action row
+  shares its columns and outer edges. Shift + ⌫ fill the 1.5u wings at each end
+  of row 3 that used to be empty. Glide surface went from **26.8% → 60%** of the
+  window; the default is 560×280, not 900×360. Resize by `−`/`+` stepper, S/M/L
+  presets, corner grabs, or the top/bottom edges; geometry persists. `×`
+  **collapses to a draggable puck** rather than quitting — quit is in the ⋯ menu,
+  because in a mouse-only session a one-click quit is unrecoverable. Status line
+  and committed mirror are behind the ⋯ → Diagnostics toggle (ADR-0004).
+- **Key geometry is loaded, not hard-coded** (spec §7.2): `languages/en/layout.json`
+  → `SwipeEngine::set_layout()` → read back → `decoder.keys` → QML. One file, both
+  consumers. A malformed layout is rejected whole and the built-in QWERTY stands.
+- **Shift + symbols**: shift cycles off/once/lock; `?123` swaps in a symbols layer
+  on the same three-row grid (tap-only — gliding is disabled there). Note the
+  uinput fallback can only type ASCII it has evdev codes for; the symbols layer
+  relies on the IBus path for the rest.
 - Injection: **IBus commit** (primary) — the app hosts a pass-through `openglide`
   engine, self-activates it on startup, forwards physical keys, and commits via
   `ibus_engine_commit_text` (UTF-8, layout-independent; ADR-0002). Verified

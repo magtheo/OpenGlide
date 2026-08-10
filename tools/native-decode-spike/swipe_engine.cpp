@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 
@@ -65,6 +66,33 @@ SwipeEngine::SwipeEngine(const std::string& model_path, const std::string& dict_
     load_dict(dict_path);
     ready_ = true;
     std::fprintf(stderr, "[swipe] ready: %zu dict words\n", n_words_);
+}
+
+bool SwipeEngine::set_layout(const std::vector<KeyCenter>& keys) {
+    if (keys.size() != 26) return false;
+    float tmp[26 * 2];
+    bool seen[26] = {false};
+    for (const KeyCenter& k : keys) {
+        char c = k.label;
+        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+        if (c < 'a' || c > 'z') return false;
+        const int i = c - 'a';
+        if (seen[i]) return false;              // duplicate letter — not permitted
+        seen[i] = true;
+        tmp[i * 2] = k.x;
+        tmp[i * 2 + 1] = k.y;
+    }
+    for (int i = 0; i < 26; i++) if (!seen[i]) return false;   // all 26 required
+    std::memcpy(keys_, tmp, sizeof(tmp));
+    return true;
+}
+
+std::vector<KeyCenter> SwipeEngine::layout() const {
+    std::vector<KeyCenter> out;
+    out.reserve(26);
+    for (int i = 0; i < 26; i++)
+        out.push_back({char('a' + i), keys_[i * 2], keys_[i * 2 + 1]});
+    return out;
 }
 
 void SwipeEngine::bump(const std::string& word) {

@@ -1,6 +1,7 @@
 # ADR-0005: One grid unit drives the whole surface; the window collapses, never quits
 
-- **Status:** Proposed
+- **Status:** Accepted* — steps 0–2 implemented in `tools/qt-prototype`; the
+  aspect-band and on-hardware gates below are still open
 - **Date:** 2026-08-10
 - **Supersedes:** none (implements spec §2.1 "resizable keyboard", §7.3/§7.4,
   §13, §23; refines the Phase 2 "resize controls / floating / docking" line in
@@ -265,6 +266,15 @@ reported caret rectangle instead of covering the text being typed.
 
 ## Verification gates
 
+- [x] **Zero-diff geometry data.** `languages/en/layout.json` compared
+      field-by-field against the built-in `C[26][2]` table: 26/26 keys identical,
+      so installing the file changes no model input. (The *runtime* half — that
+      the loaded layout reaches the engine on a real run — is part of the
+      on-hardware gate below.)
+- [x] **`set_layout` cannot corrupt the decoder.** Verified against the extracted
+      implementation: 26 unique letters accepted (upper- or lowercase), 25 keys /
+      duplicate letter / non-letter label all rejected, and the previously
+      installed geometry survives every rejection.
 - [ ] **Aspect band measured, not assumed.** Capture a corpus at ≥3 letter-block
       aspect ratios (e.g. 10:3, 10:4, 10:2.2) with the same prompts, and compare
       dict top-1 against the 94% baseline of
@@ -279,6 +289,12 @@ reported caret rectangle instead of covering the text being typed.
       `surface-probe` focus check (RESULTS.md §surface-probe) against Full,
       Collapsed, and post-restore-from-Hidden — `WindowDoesNotAcceptFocus` is
       verified on XWayland today but not for a window that hides and re-shows.
+- [ ] **It builds and renders.** Steps 0–2 were written against a machine with no
+      Qt Quick and no ExecuTorch: `main.qml` is qmllint-clean (identical warning
+      profile to the previous version apart from the three new `SwipeSurface`
+      properties qmllint cannot resolve), and `appsettings/swipesurface/
+      decoderbridge` pass `g++ -fsyntax-only` against real Qt 6 headers — but
+      nothing has been compiled or rendered. First run on hardware is the gate.
 - [ ] **The mouse-only loop closes.** With no physical keyboard touched:
       collapse, restore, resize by preset, resize by grip, move, dock, hide, and
       restore from hidden. Any step that requires a keyboard is a failure of

@@ -8,6 +8,7 @@
 #include "swipesurface.h"
 #include "decoderbridge.h"
 #include "injector.h"
+#include "appsettings.h"
 
 // Dump a backtrace on crash so we can localize faults in the IBus/GLib path.
 static void crash_handler(int sig) {
@@ -29,10 +30,12 @@ int main(int argc, char *argv[]) {
 
     DecoderBridge decoder;
     Injector injector;
+    AppSettings settings;
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("decoder", &decoder);
     engine.rootContext()->setContextProperty("injector", &injector);
+    engine.rootContext()->setContextProperty("settings", &settings);
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
     if (engine.rootObjects().isEmpty())
         return -1;

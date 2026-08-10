@@ -26,7 +26,7 @@ Core technical assumptions are now **measured, not guessed**:
 | UTF-8 via IBus (GNOME) | ✅ **wired into prototype** — hosts a pass-through engine, self-activates; `og_ibus_commit` lands exact UTF-8 (verified `æøå 🫐`); uinput fallback | tools/qt-prototype/src/ibus_engine.c, RESULTS.md |
 | Licensing | ✅ preliminary GO (GPL-3.0-only lib + commercial-permissive weights) | ADR-0001 |
 | Decisions / contracts | ✅ ADR-0001..0004, versioned data-formats | decisions/, data-formats.md |
-| **Window / layout UX** | ⚠️ **the gap** — glide surface is 26.8% of the window; not resizable; `×` quits the process | ADR-0005 |
+| **Window / layout UX** | 🔨 **rebuilt, unverified** — u/v grid (glide surface 26.8% → 60%), wings filled, resizable, collapses instead of quitting. Written without a Qt/ExecuTorch box: lint + syntax clean, **never compiled or rendered** | ADR-0005 |
 
 ## How reality refined the spec's §28 phases
 
@@ -65,33 +65,49 @@ gesture**, and `×` calls `Qt.quit()` — which in a mouse-only session is
 unrecoverable, since restarting needs a terminal. [ADR-0005](decisions/0005-keyboard-layout-and-window-ux.md)
 settles the layout, resize, and visibility model. Ordered work:
 
-0. **Single source of truth for key geometry** (blocking prereq — spec §7.2).
-   The 26 normalized key centers exist twice (`main.qml:36-43` and
-   `swipe_engine.cpp:50-56`); a `layout.json` (§22) loaded by both, plus
-   `SwipeEngine::set_layout()`, must land *before* any layout edit or the
-   decoder silently scores against a keyboard that is no longer on screen.
-1. **Grid unification** — one `u`/`v` unit for every element; letter block edge
-   to edge; shift + ⌫ in the empty row-3 wings; action row on the same 10
-   columns; drop the status line and committed mirror (ADR-0004 diagnostics);
-   candidate chips in fixed `u`-slots, elided. `×` → collapse, not quit.
-   Expected: glide surface **26.8% → 60%**; same key size in a 538×269 window
-   (55% less screen), or 1.5× bigger keys in the same window.
-   Fix alongside: tap-threshold anisotropy (`swipesurface.cpp:48` compares
-   normalized dx/dy symmetrically → 0.50 key horizontally vs 0.15 vertically),
-   `wordSwipePx` → multiple of `u`, live glide path instead of the stale trail.
-2. **Resize / move / persist** — presets + `−`/`+` stepper first (a mouse-only
-   product must not require dragging a 6 px edge), then a ≥16 px grip corner via
-   `startSystemResize`, then edge zones; `minimumWidth`; snap-to-edge; geometry
-   persisted.
-3. **Visibility model** — Full / Collapsed (puck) / Hidden, then the spec §13.1
-   LMB+RMB evdev chord (observe-only, ADR-0004) + tray + configurable toggle.
-4. **Aspect-ratio band** — measure what letter-block aspects the decoder
-   tolerates (capture at 10:3 / 10:4 / 10:2.2, compare to the 94% corpus
-   baseline) and clamp resizing to it. Converts "resizable" from a hope into a
-   guarantee.
-5. **History bar** (§9.3) in the reclaimed space; **numbers/symbols layer +
-   shift** (no digits or capitals exist today); caret avoidance via the unused
+0. ~~**Single source of truth for key geometry**~~ ✅ (spec §7.2). The 26 centers
+   now live once, in `languages/en/layout.json` (the schema `data-formats.md`
+   already specified). `DecoderBridge` parses it, installs it via the new
+   `SwipeEngine::set_layout()`, then **reads the geometry back out of the engine**
+   and hands that to QML as `decoder.keys` — so the keys on screen and the keys
+   the decoder scores against are the same objects, not two copies that agree by
+   luck. A malformed file is rejected wholesale and the built-in QWERTY stands.
+   Verified: layout.json is field-identical to the old `C[26][2]`; `set_layout`
+   rejects short/duplicate/non-letter sets and keeps the prior geometry on reject.
+1. ~~**Grid unification**~~ ✅ — `u = contentWidth/10` and `rowH` drive every
+   element; letter block edge to edge; shift + ⌫ fill the row-3 wings; action row
+   on the same ten columns and the same outer edges; status line and committed
+   mirror moved behind a diagnostics toggle (ADR-0004); candidate chips in fixed
+   `u`-slots with eliding. **Glide surface 26.8% → 60%**; default window is now
+   560×280 instead of 900×360. Also fixed: tap-threshold anisotropy (now measured
+   in key widths, not raw normalized units), `wordSwipePx` → one column, live
+   glide trail with fade instead of the previous word's stale path. Added: shift
+   (off/once/lock) and a `?123` symbols layer on the same grid — there were no
+   capitals and no digits before.
+2. ~~**Resize / move / persist**~~ ✅ — `−`/`+` stepper and S/M/L presets as the
+   primary path, corner grabs ≥16 px + top/bottom edges via `startSystemResize`,
+   `minimumWidth/Height`, any non-control chrome drags the window, geometry
+   persisted to `~/.config/openglide/` via `AppSettings`. The left/right resize
+   strips deliberately stop at the chrome and action bands so they never overlap
+   the letter block's outer edge — grabbing a resize handle instead of starting a
+   glide on Q or P would be worse than the bug it fixes.
+   Still open here: snap-to-edge / docked mode.
+3. **Visibility model** — Full / Collapsed ✅ (`×` collapses to a draggable puck;
+   quit moved into the ⋯ menu, so no single click can terminate a mouse-only
+   session). **Hidden** state + the spec §13.1 LMB+RMB evdev chord (observe-only,
+   ADR-0004) + tray + configurable toggle are still to do.
+4. **Aspect-ratio band** — now that `u` and `rowH` are independent the block
+   fills any window shape, so this is the live risk: measure what letter-block
+   aspects the decoder tolerates (capture at 10:3 / 10:4 / 10:2.2, compare to the
+   94% corpus baseline) and clamp resizing to it. The current aspect is surfaced
+   in the diagnostics overlay so the measurement has something to read.
+5. **History bar** (§9.3) in the reclaimed space; caret avoidance via the unused
    `set_cursor_location` IBus vfunc.
+
+> ⚠️ Steps 0–2 were written on a box with no Qt Quick and no ExecuTorch. `main.qml`
+> is qmllint-clean and the C++ passes `-fsyntax-only` against real Qt 6 headers,
+> but **none of it has been compiled or rendered**. First build on hardware is the
+> gate (ADR-0005).
 
 Also Phase 2 per spec §28: ~~personalization~~ ✅, personal dictionary, SQLite,
 punctuation, settings UI.
