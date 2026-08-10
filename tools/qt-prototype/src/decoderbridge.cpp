@@ -30,11 +30,23 @@ static QString resolveModel() {
     return {};
 }
 
+// Find the word-frequency list (good>god prior) next to the spike dir.
+static QString resolveFreq() {
+    const QStringList candidates = {
+        QCoreApplication::applicationDirPath() + "/../../native-decode-spike/word_freq.txt",
+        QCoreApplication::applicationDirPath() + "/../native-decode-spike/word_freq.txt",
+        "/home/theo/Documents/coding/repos/OpenGlide/tools/native-decode-spike/word_freq.txt",
+    };
+    for (const QString &p : candidates) if (QFileInfo::exists(p)) return p;
+    return {};
+}
+
 DecoderBridge::DecoderBridge(QObject *parent) : QObject(parent) {
     // Load synchronously (~0.1-0.3 s: model load is ~0.1 ms; dictionary load
     // dominates). Brief, at startup, before the window is interactive.
     m_eng = std::make_shared<SwipeEngine>(resolveModel().toStdString(),
-                                          "/usr/share/dict/american-english");
+                                          "/usr/share/dict/american-english",
+                                          resolveFreq().toStdString());
     m_ready = m_eng->ready();
     // Defer the signal so QML (connected after construction) observes the state.
     QTimer::singleShot(0, this, [this] {

@@ -3,7 +3,7 @@
 
 #include <executorch/runtime/platform/runtime.h>
 #include <executorch/runtime/core/evalue.h>
-#include <executorch/runtime/core/exec_aten/util/scalar_type_util.h>
+#include <cstdlib>
 #include <executorch/extension/tensor/tensor_ptr.h>
 #include <executorch/extension/tensor/tensor_ptr_maker.h>
 
@@ -42,7 +42,8 @@ static float interp1(float q, const std::vector<float>& x, const std::vector<flo
     return y[lo] + f * (y[hi] - y[lo]);
 }
 
-SwipeEngine::SwipeEngine(const std::string& model_path, const std::string& dict_path) {
+SwipeEngine::SwipeEngine(const std::string& model_path, const std::string& dict_path,
+                         const std::string& freq_path) {
     // QWERTY key centres in a..z order (validate.py QWERTY, LETTERS=sorted).
     static const float C[26][2] = {
         {0.10f, 0.500f}, {0.60f, 0.833f}, {0.40f, 0.833f}, {0.30f, 0.500f}, {0.25f, 0.167f},
@@ -57,6 +58,7 @@ SwipeEngine::SwipeEngine(const std::string& model_path, const std::string& dict_
     runtime_init();
     mod_ = std::make_unique<Module>(model_path);
     if (mod_->load() != Error::Ok) { std::fprintf(stderr, "[swipe] model load failed\n"); return; }
+    if (!freq_path.empty()) load_freq(freq_path);   // prior (good>god) — before dict so logfreq is set
     load_dict(dict_path);
     ready_ = true;
     std::fprintf(stderr, "[swipe] ready: %zu dict words\n", n_words_);
@@ -80,8 +82,28 @@ void SwipeEngine::load_dict(const std::string& path) {
         TrieNode* tn = root_.get();
         for (char c : w) tn = trie_child(tn, (int8_t)(c - 'a'));
         tn->is_word = true;
+        auto it = freq_.find(w);
+        tn->logfreq = (it != freq_.end()) ? it->second : 0.0;   // unknown dict words -> no prior (rare)
         n_words_++;
     }
+}
+
+void SwipeEngine::load_freq(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) { std::fprintf(stderr, "[swipe] freq list not found (%s); no frequency prior\n", path.c_str()); return; }
+    std::string line;
+    size_t n = 0;
+    while (std::getline(f, line)) {
+        auto tab = line.find('\t');
+        if (tab == std::string::npos) continue;
+        std::string w = line.substr(0, tab);
+        for (auto& c : w) c = (char)std::tolower((unsigned char)c);
+        double count = std::atof(line.c_str() + tab + 1);
+        if (count < 1.0 || w.empty()) continue;
+        freq_[w] = std::log(count);
+        n++;
+    }
+    std::fprintf(stderr, "[swipe] freq: %zu words loaded\n", n);
 }
 
 static void resample_into(const std::vector<SwipePoint>& pts, float out[2 * T_IN]) {
@@ -156,7 +178,7 @@ void SwipeEngine::score_dfs(TrieNode* node, const double* pL, const double* pB,
     if (node->is_word) {
         int wlen = (int)prefix.size();
         if (std::abs(wlen - glen) <= 3)
-            out.push_back({(float)lae(aB[T_OUT - 1], aL[T_OUT - 1]), prefix});
+            out.push_back({(float)(lae(aB[T_OUT - 1], aL[T_OUT - 1]) + freq_lambda_ * node->logfreq), prefix});
     }
     if ((int)prefix.size() < maxwlen) {
         for (auto& c : node->children) {

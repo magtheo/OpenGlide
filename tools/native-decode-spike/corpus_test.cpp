@@ -1,6 +1,7 @@
 // Corpus test: run the native SwipeEngine over a flattened swipe corpus and
 // report top-1 word accuracy + average decode latency (vs the Python decoder).
 #include "swipe_engine.h"
+#include <cstdlib>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -9,8 +10,9 @@
 #include <vector>
 
 int main(int argc, char** argv) {
-    if (argc < 4) { std::fprintf(stderr, "usage: corpus_test <model.pte> <dict> <corpus_flat.txt>\n"); return 2; }
-    SwipeEngine eng(argv[1], argv[2]);
+    if (argc < 4) { std::fprintf(stderr, "usage: corpus_test <model.pte> <dict> <corpus_flat.txt> [freq.txt] [lambda]\n"); return 2; }
+    SwipeEngine eng(argv[1], argv[2], argc > 4 ? argv[4] : "");
+    if (argc > 5) eng.set_freq_lambda(std::atof(argv[5]));
     if (!eng.ready()) { std::fprintf(stderr, "engine not ready\n"); return 1; }
 
     std::ifstream f(argv[3]);
