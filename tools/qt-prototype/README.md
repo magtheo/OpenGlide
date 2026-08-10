@@ -41,6 +41,12 @@ target app (spec §17) — confirmed on XWayland.
   ~79 ms dict decode avg (worst-case ~350 ms; was ~1350 ms with Python). Decode
   is a prefix-shared **trie CTC** forward — one DFS over the dictionary trie,
   exact (~1.8× faster than per-word scoring).
+- **Tap-to-type**: a tap (press, <5% movement) types the nearest key; a drag
+  glides. They coexist on one surface (`src/swipesurface.{h,cpp}`).
+- **Double-letter recovery**: the glide passes a doubled key once (greedy emits
+  single — god, helo), so candidates equal to the greedy with one letter doubled
+  (good, hello) get +4.5 nats. (A frequency prior was tried but rejected: "help"
+  beats "hello" on both CTC and frequency.) `decoderbridge` logs top-5 scores/glide.
 - Injection: **IBus commit** (primary) — the app hosts a pass-through `openglide`
   engine, self-activates it on startup, forwards physical keys, and commits via
   `ibus_engine_commit_text` (UTF-8, layout-independent; ADR-0002). Verified

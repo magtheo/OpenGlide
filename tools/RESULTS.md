@@ -159,6 +159,12 @@ Mechanism findings:
 - **Pass-through key forwarding** (`ibus_engine_forward_key_event` in `process_key_event`) is required so the active engine doesn't absorb physical keys — otherwise self-activating would break normal typing.
 - **The engine pointer can dangle across threads too** — `g_engine` is set in `enable`/cleared in `disable` (GLib thread). Reading it on the Qt thread and passing it to `commit_idle` races with disable (use-after-free). Fix: `commit_idle` re-reads `g_engine` *itself* on the GLib thread (serialized with enable/disable → valid-or-NULL, never dangling). If the engine disabled between the caller's check and dispatch (focus drifted), `commit_idle` sees NULL → safe no-op → Injector falls back to `uinput`.
 
+## Tap-to-type + double-letter recovery ✅
+- **Tap-to-type** (`src/swipesurface.{h,cpp}`): `SwipeSurface` tells tap from swipe by total displacement (<5% normalized = stayed on one key). A tap emits `tapped(nx,ny)` instead of `swipeCompleted`; QML types the nearest key (lowercase) via the injector + a brief key-pop. Coexists with glide.
+- **Double-letter recovery** (`swipe_engine.cpp`): the glide passes a doubled key once, so greedy emits a single letter (god, helo) and the true double-letter word (good, hello) is CTC-penalized. Candidates equal to the greedy with one letter doubled (`is_greedy_with_double`: collapse one adjacent-identical pair == greedy) get +4.5 nats → recovers good←god, hello←helo.
+
+**Why not a frequency prior (tried, rejected):** a log-frequency prior (`score += λ·log(count)`) was added first to fix good→god ("good" ~10× commoner). It fixed that but broke **hello→help**. Logged scores showed why — at λ=1.0 `help(15.15) hello(7.95)`; backing out the prior gives **help CTC −3.25 vs hello CTC −5.27** (help's CTC is *higher*) and help is ~178× more frequent ("hello" is rare in written ngrams). So help beats hello on **both** axes → no positive λ can pick hello. The doubled letter is the real signal; the targeted bonus fixes good/god *and* hello/help. Corpus stays 94% throughout (neither prior nor bonus override clear CTC winners). `decoderbridge` logs top-5 scores per glide for tuning.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make
