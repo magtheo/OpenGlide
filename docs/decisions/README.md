@@ -18,6 +18,7 @@ verified choice here; put an open executable question in `tools/*-probe/`.
 | 0002   | Text-output architecture: commit UTF-8 first, raw keys as fallback | Accepted  |
 | 0003   | Async contracts: swipe identity, single-owner output, latency      | Accepted  |
 | 0004   | Diagnostics and operations policy                                  | Accepted  |
+| 0005   | One grid unit drives the surface; the window collapses, never quits | Proposed |
 
 \* 0001 carries verification gates that must close before public release.
 

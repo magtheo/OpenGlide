@@ -26,6 +26,7 @@ Core technical assumptions are now **measured, not guessed**:
 | UTF-8 via IBus (GNOME) | ✅ **wired into prototype** — hosts a pass-through engine, self-activates; `og_ibus_commit` lands exact UTF-8 (verified `æøå 🫐`); uinput fallback | tools/qt-prototype/src/ibus_engine.c, RESULTS.md |
 | Licensing | ✅ preliminary GO (GPL-3.0-only lib + commercial-permissive weights) | ADR-0001 |
 | Decisions / contracts | ✅ ADR-0001..0004, versioned data-formats | decisions/, data-formats.md |
+| **Window / layout UX** | ⚠️ **the gap** — glide surface is 26.8% of the window; not resizable; `×` quits the process | ADR-0005 |
 
 ## How reality refined the spec's §28 phases
 
@@ -51,8 +52,52 @@ Remaining to harden Phase 1 toward product quality:
 - ~~Personalization~~ ✅ done (first Phase 2 work): per-user word counts persist at `~/.local/share/openglide/user_freq.tsv`; decode adds `user_lambda·log(count+1)` (λ=2.0) so your own vocabulary wins ties over time. Bumped on every glide commit + candidate correction, saved immediately (survives crash/kill). The right "learn common words" — learns YOUR words, not generic frequency (which broke hello→help).
 - Out-of-window capture under Qt's mouse-grab on each platform.
 
-### Phase 2–5 — per spec §28
-Daily keyboard (~~personalization~~ ✅, dictionary, SQLite, floating/docked) → speech (whisper.cpp) → rich IME (Fcitx 5) → languages (Norwegian).
+### Phase 2 — Daily keyboard (in progress)
+
+The decode pipeline is good enough to use; **the window is not.** Measured on
+`main.qml` @ `a34e9f7`: the glide surface is **26.8%** of the default 900×360
+window (23.0% at 1200×400 — it gets *worse* as you widen it), the action row is
+built by a different layout system than the letter grid so its edges don't line
+up, three grid columns inside the letter block are empty (1.5 at each end of
+row 3 — exactly where shift and ⌫ belong), ~23% of the window is
+non-interactive debug text, the window **cannot be resized by any mouse
+gesture**, and `×` calls `Qt.quit()` — which in a mouse-only session is
+unrecoverable, since restarting needs a terminal. [ADR-0005](decisions/0005-keyboard-layout-and-window-ux.md)
+settles the layout, resize, and visibility model. Ordered work:
+
+0. **Single source of truth for key geometry** (blocking prereq — spec §7.2).
+   The 26 normalized key centers exist twice (`main.qml:36-43` and
+   `swipe_engine.cpp:50-56`); a `layout.json` (§22) loaded by both, plus
+   `SwipeEngine::set_layout()`, must land *before* any layout edit or the
+   decoder silently scores against a keyboard that is no longer on screen.
+1. **Grid unification** — one `u`/`v` unit for every element; letter block edge
+   to edge; shift + ⌫ in the empty row-3 wings; action row on the same 10
+   columns; drop the status line and committed mirror (ADR-0004 diagnostics);
+   candidate chips in fixed `u`-slots, elided. `×` → collapse, not quit.
+   Expected: glide surface **26.8% → 60%**; same key size in a 538×269 window
+   (55% less screen), or 1.5× bigger keys in the same window.
+   Fix alongside: tap-threshold anisotropy (`swipesurface.cpp:48` compares
+   normalized dx/dy symmetrically → 0.50 key horizontally vs 0.15 vertically),
+   `wordSwipePx` → multiple of `u`, live glide path instead of the stale trail.
+2. **Resize / move / persist** — presets + `−`/`+` stepper first (a mouse-only
+   product must not require dragging a 6 px edge), then a ≥16 px grip corner via
+   `startSystemResize`, then edge zones; `minimumWidth`; snap-to-edge; geometry
+   persisted.
+3. **Visibility model** — Full / Collapsed (puck) / Hidden, then the spec §13.1
+   LMB+RMB evdev chord (observe-only, ADR-0004) + tray + configurable toggle.
+4. **Aspect-ratio band** — measure what letter-block aspects the decoder
+   tolerates (capture at 10:3 / 10:4 / 10:2.2, compare to the 94% corpus
+   baseline) and clamp resizing to it. Converts "resizable" from a hope into a
+   guarantee.
+5. **History bar** (§9.3) in the reclaimed space; **numbers/symbols layer +
+   shift** (no digits or capitals exist today); caret avoidance via the unused
+   `set_cursor_location` IBus vfunc.
+
+Also Phase 2 per spec §28: ~~personalization~~ ✅, personal dictionary, SQLite,
+punctuation, settings UI.
+
+### Phase 3–5 — per spec §28
+Speech (whisper.cpp) → rich IME (Fcitx 5) → languages (Norwegian).
 
 ## Open prerequisites (need user authorization)
 - ~~Qt6 dev + QML modules~~ ✅ installed.
