@@ -48,10 +48,11 @@ Remaining to harden Phase 1 toward product quality:
 - ~~UTF-8 injection via IBus~~ ✅ **wired into the Qt prototype** (`tools/qt-prototype/src/ibus_engine.{c,h}`): the app hosts a pass-through IBus engine (`openglide`), self-activates it as the global engine on startup (in-process `set_global_engine_async` — external `SetGlobalEngine` can't resolve a runtime engine), forwards physical keys so typing still works, and commits via `og_ibus_commit` → `ibus_engine_commit_text` (UTF-8, layout-independent) with `uinput` fallback. Verified: `æøå 🫐 openglide` lands exactly in a focused GTK sink; previous engine restored on shutdown. Remaining: the `input-method-v2` path for wlroots compositors.
 - ~~One-click candidate correction; decoder overshoot adapter (§6.3); watchdog for the `pending` state~~ ✅ done (`tools/qt-prototype`): candidate click → backspace + recommit; overshoot adapter (now in the native `SwipeEngine`) drops trailing OOB + clamps to `[0,1]`; a 20 s stuck-backstop + `decoderDied` (fires if the engine fails to load) keep the status state machine from sticking.
 - ~~Tap-to-type + double-letter recovery~~ ✅ done: a tap (press, <5% movement) types the nearest key via IBus — precise entry alongside glide (`src/swipesurface`). And a **double-letter bonus** recovers doubled letters the glide collapses (good←god, hello←helo): candidates equal to the greedy with one letter doubled get +4.5 nats. (A word-frequency prior was tried first but **rejected** — logged scores showed "help" beats "hello" on both CTC and frequency, so no λ can pick hello; the doubled letter is the real signal.) Corpus still 94%.
+- ~~Personalization~~ ✅ done (first Phase 2 work): per-user word counts persist at `~/.local/share/openglide/user_freq.tsv`; decode adds `user_lambda·log(count+1)` (λ=2.0) so your own vocabulary wins ties over time. Bumped on every glide commit + candidate correction, saved immediately (survives crash/kill). The right "learn common words" — learns YOUR words, not generic frequency (which broke hello→help).
 - Out-of-window capture under Qt's mouse-grab on each platform.
 
 ### Phase 2–5 — per spec §28
-Daily keyboard (dictionary, SQLite, personalization, floating/docked) → speech (whisper.cpp) → rich IME (Fcitx 5) → languages (Norwegian).
+Daily keyboard (~~personalization~~ ✅, dictionary, SQLite, floating/docked) → speech (whisper.cpp) → rich IME (Fcitx 5) → languages (Norwegian).
 
 ## Open prerequisites (need user authorization)
 - ~~Qt6 dev + QML modules~~ ✅ installed.

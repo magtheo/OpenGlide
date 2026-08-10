@@ -47,6 +47,11 @@ target app (spec §17) — confirmed on XWayland.
   single — god, helo), so candidates equal to the greedy with one letter doubled
   (good, hello) get +4.5 nats. (A frequency prior was tried but rejected: "help"
   beats "hello" on both CTC and frequency.) `decoderbridge` logs top-5 scores/glide.
+- **Personalization**: per-user word counts (`~/.local/share/openglide/user_freq.tsv`)
+  boost your own words in decode (score += λ·log(count+1), λ=2.0) — learns YOUR
+  vocabulary (the right "learn common words"). Bumped on glide commit + correction.
+- **Layout**: frameless (drag the top bar to move, × to close), keys scale on
+  resize (no squish/overlap), integrated grid, + a swipe-delete gauge (dots per word).
 - Injection: **IBus commit** (primary) — the app hosts a pass-through `openglide`
   engine, self-activates it on startup, forwards physical keys, and commits via
   `ibus_engine_commit_text` (UTF-8, layout-independent; ADR-0002). Verified

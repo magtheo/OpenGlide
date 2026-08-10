@@ -165,6 +165,9 @@ Mechanism findings:
 
 **Why not a frequency prior (tried, rejected):** a log-frequency prior (`score += λ·log(count)`) was added first to fix good→god ("good" ~10× commoner). It fixed that but broke **hello→help**. Logged scores showed why — at λ=1.0 `help(15.15) hello(7.95)`; backing out the prior gives **help CTC −3.25 vs hello CTC −5.27** (help's CTC is *higher*) and help is ~178× more frequent ("hello" is rare in written ngrams). So help beats hello on **both** axes → no positive λ can pick hello. The doubled letter is the real signal; the targeted bonus fixes good/god *and* hello/help. Corpus stays 94% throughout (neither prior nor bonus override clear CTC winners). `decoderbridge` logs top-5 scores per glide for tuning.
 
+## Personalization — learn the user's words ✅
+`swipe_engine` keeps per-user word counts at `~/.local/share/openglide/user_freq.tsv` (loaded at startup). `decode` snapshots them under a mutex (`bump` runs on the UI thread) and adds `user_lambda·log(count+1)` (λ=2.0) before ranking — so words the user actually uses win ties over time. This is the right "learn common words": it learns the USER's vocabulary, sidestepping the help>hello problem that killed the generic frequency prior (the user teaches it "hello" by using/correcting it). Bumped on every glide commit + candidate correction (`decoder.bumpWord`); `bump()` saves immediately because SIGTERM/crash skips the dtor (so shutdown-only save would lose everything). Verified: persistence test (bump hello×2/world/good → file has `hello 2, world 1, good 1`); corpus still 94% (empty user_freq → no-op).
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make
