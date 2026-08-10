@@ -43,8 +43,10 @@ static GThread           *g_ibus_thread_id = NULL;   /* for inline dispatch when
 static gpointer test_thread(gpointer p) {
     (void)p;
     g_usleep(100000);   /* 100 ms: let the focused sink settle */
-    bool ok = og_ibus_commit("æøå 🫐 openglide");
-    fprintf(stderr, "[openglide-ibus] TEST og_ibus_commit (cross-thread) -> %d\n", ok);
+    bool c = og_ibus_commit("abcde");
+    g_usleep(50000);
+    bool b = og_ibus_backspace(2);   /* delete "de" -> expect "abc" */
+    fprintf(stderr, "[openglide-ibus] TEST commit=%d backspace=%d (expect 'abc')\n", c, b);
     return NULL;
 }
 static void og_enable(IBusEngine *engine) {
@@ -160,6 +162,38 @@ bool og_ibus_commit(const char *utf8) {
     }
     bool ok = j->done;
     free(j->text);
+    free(j);
+    return ok;
+}
+
+/* Delete n chars via the engine (forward KEY_BACKSPACE). Same IBus path as commit
+ * so commit/type/backspace stay ordered at the client — mixing a uinput backspace
+ * with IBus commit_text drifts (the root of the delete/undo corruption). */
+struct backspace_job { int n; volatile int done; };
+static gboolean backspace_idle(gpointer p) {
+    struct backspace_job *j = (struct backspace_job *)p;
+    IBusEngine *e = (IBusEngine *)g_atomic_pointer_get(&g_engine);
+    if (e) {
+        /* delete_surrounding_text is the IME delete API (forwarding KEY_BACKSPACE
+         * is not reliably applied by clients for text editing). -n..0 = the n chars
+         * before the cursor (a backspace run). */
+        ibus_engine_delete_surrounding_text(e, -j->n, (guint)j->n);
+        j->done = 1;
+    }
+    return G_SOURCE_REMOVE;
+}
+bool og_ibus_backspace(int n) {
+    if (n <= 0 || !g_ctx || !g_atomic_pointer_get(&g_engine)) return false;
+    struct backspace_job *j = malloc(sizeof *j);
+    if (!j) return false;
+    j->n = n; j->done = 0;
+    if (g_ibus_thread_id && g_thread_self() == g_ibus_thread_id) {
+        backspace_idle(j);
+    } else {
+        g_main_context_invoke(g_ctx, backspace_idle, j);
+        for (int i = 0; i < 500 && !j->done; i++) g_usleep(1000);
+    }
+    bool ok = j->done;
     free(j);
     return ok;
 }

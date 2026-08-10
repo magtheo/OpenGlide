@@ -29,6 +29,10 @@ bool og_ibus_active(void);
  * (caller should fall back to uinput). */
 bool og_ibus_commit(const char *utf8);
 
+/* Delete n chars from the focused field (forward KEY_BACKSPACE via the engine).
+ * Same path as og_ibus_commit. Returns false if OpenGlide isn't active. */
+bool og_ibus_backspace(int n);
+
 /* Restore the previous global engine. Call at shutdown. */
 void og_ibus_shutdown(void);
 

@@ -76,11 +76,13 @@ Window {
     }
     function deleteChar() {
         if (!injected.length) return;
+        candidates = []; lastWord = "";   // editing invalidates the last glide's suggestions
         injector.backspace(1);
         injected = injected.substring(0, injected.length - 1);
     }
     function deleteWord() {                      // backspace-swipe: trailing spaces + one word
         if (!injected.length) return "";
+        candidates = []; lastWord = "";
         var i = injected.length, n = 0;
         while (i > 0 && injected[i - 1] === " ") { i--; n++; }
         while (i > 0 && injected[i - 1] !== " ") { i--; n++; }
@@ -90,6 +92,7 @@ Window {
         return deleted;                          // staged so swipe-right can undo it
     }
     function undoWord(s) {                        // swipe-right: re-inject a staged deletion verbatim
+        candidates = []; lastWord = "";
         for (var k = 0; k < s.length; k++) injector.typeChar(s[k]);
         injected += s;
     }

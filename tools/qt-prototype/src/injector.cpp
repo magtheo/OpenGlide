@@ -113,8 +113,9 @@ bool Injector::commit(const QString &word) {
 }
 
 bool Injector::ibusActive() const { return og_ibus_active(); }
-
 void Injector::backspace(int n) {
+    if (n <= 0) return;
+    if (og_ibus_active()) { og_ibus_backspace(n); return; }   // same path as commit (uinput backspace drifts under IBus)
     if (m_fd < 0 && !setup()) return;
     for (int i = 0; i < n; i++) {
         emitKey(KEY_BACKSPACE, 1);
