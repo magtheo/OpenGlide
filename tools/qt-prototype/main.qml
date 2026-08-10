@@ -208,7 +208,16 @@ Window {
                 watchdog.restart();
                 if (decoder.ready) decoder.decode(points);
             }
+            onTapped: function(nx, ny) {
+                var uk = win.nearestKey(nx, ny);
+                if (!uk) return;
+                injector.typeChar(uk.toLowerCase());
+                win.injected += uk.toLowerCase();
+                win.activeKey = uk;            // brief key-pop flash
+                tapFlash.restart();
+            }
         }
+        Timer { id: tapFlash; interval: 120; onTriggered: if (!surface.swiping) win.activeKey = "" }
     }
 
     // ---- action row: comma · space · period · backspace(FUTO gesture) ----

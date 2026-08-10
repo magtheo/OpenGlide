@@ -18,6 +18,9 @@ signals:
     void swipingChanged();
     // points: list of {x, y, t} with x,y normalized-unclamped, t in ms since press
     void swipeCompleted(QVariantList points);
+    // A tap (press+release with little movement) — type the key under it. nx,ny
+    // are normalized to the surface frame, same convention as swipeCompleted.
+    void tapped(qreal nx, qreal ny);
     // live normalized-unclamped cursor during a glide (for key-pop UI); same frame as swipeCompleted
     void cursorMoved(qreal nx, qreal ny);
 
