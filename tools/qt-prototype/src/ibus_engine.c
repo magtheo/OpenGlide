@@ -139,7 +139,8 @@ static gboolean commit_idle(gpointer p) {
      * dangle if it disabled between the caller's read and this dispatch. */
     IBusEngine *e = (IBusEngine *)g_atomic_pointer_get(&g_engine);
     if (e) {
-        IBusText *t = ibus_text_new_from_string(j->text);   /* the validated UTF-8 path */
+        IBusText *t = ibus_text_new_from_string(j->text);   /* the validated UTF-8 commit path */
+        g_object_ref_sink(t);   /* sink the floating ref so the unref below is valid */
         ibus_engine_commit_text(e, t);
         g_object_unref(t);
         j->done = 1;
