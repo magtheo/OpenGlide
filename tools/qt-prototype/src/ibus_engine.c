@@ -18,6 +18,7 @@
 #include <glib-object.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* ---- a pass-through IBusEngine: forwards keys + reports enable/disable ---- */
 #define OG_TYPE_ENGINE (og_engine_get_type())
@@ -36,13 +37,21 @@ static gchar               *g_prev = NULL;          /* saved global engine name 
 static volatile IBusEngine *g_engine = NULL;        /* non-NULL => active + has a context */
 static volatile gint        g_connected = 0;
 static GThread           *g_ibus_thread_id = NULL;   /* for inline dispatch when already on the IBus thread */
+/* Self-test (OPENGLIDE_IBUS_TEST=1) run from a SEPARATE thread — exercises the
+ * cross-thread commit path (g_main_context_invoke + wait) that the inline call
+ * at enable does NOT, and which is what real glide commits use. */
+static gpointer test_thread(gpointer p) {
+    (void)p;
+    g_usleep(100000);   /* 100 ms: let the focused sink settle */
+    bool ok = og_ibus_commit("æøå 🫐 openglide");
+    fprintf(stderr, "[openglide-ibus] TEST og_ibus_commit (cross-thread) -> %d\n", ok);
+    return NULL;
+}
 static void og_enable(IBusEngine *engine) {
     g_atomic_pointer_set(&g_engine, engine);        /* now bound to the focused context */
     fprintf(stderr, "[openglide-ibus] enabled — commits route via IBus\n");
-    if (getenv("OPENGLIDE_IBUS_TEST")) {            /* self-test: commit UTF-8 right at enable */
-        bool ok = og_ibus_commit("æøå 🫐 openglide");
-        fprintf(stderr, "[openglide-ibus] TEST og_ibus_commit -> %d\n", ok);
-    }
+    if (getenv("OPENGLIDE_IBUS_TEST"))              /* self-test from a separate thread */
+        g_thread_new("og-test", test_thread, NULL);
 }
 static void og_disable(IBusEngine *engine) {
     (void)engine;
@@ -118,24 +127,41 @@ bool og_ibus_start(void) {
 bool og_ibus_connected(void) { return g_atomic_int_get(&g_connected) != 0; }
 bool og_ibus_active(void)    { return g_atomic_pointer_get(&g_engine) != NULL; }
 
-struct commit_job { const char *text; IBusEngine *engine; int done; };
+/* Heap-allocated: g_main_context_invoke is asynchronous here, so the job must
+ * outlive the caller's stack frame. The caller frees it after observing done. */
+struct commit_job { char *text; volatile int done; };
 static gboolean commit_idle(gpointer p) {
     struct commit_job *j = (struct commit_job *)p;
-    IBusText *t = ibus_text_new_from_string(j->text);   /* the validated UTF-8 commit path */
-    ibus_engine_commit_text(j->engine, t);
-    g_object_unref(t);
-    j->done = 1;
+    /* Re-read g_engine HERE (GLib thread): enable/disable also run on this thread,
+     * so the engine is valid-or-NULL — never the caller's pointer, which could
+     * dangle if it disabled between the caller's read and this dispatch. */
+    IBusEngine *e = (IBusEngine *)g_atomic_pointer_get(&g_engine);
+    if (e) {
+        IBusText *t = ibus_text_new_from_string(j->text);   /* the validated UTF-8 path */
+        ibus_engine_commit_text(e, t);
+        g_object_unref(t);
+        j->done = 1;
+    }
     return G_SOURCE_REMOVE;
 }
 bool og_ibus_commit(const char *utf8) {
-    IBusEngine *e = (IBusEngine *)g_atomic_pointer_get(&g_engine);
-    if (!e || !g_ctx) return false;
-    struct commit_job j = { utf8, e, 0 };
-    if (g_ibus_thread_id && g_thread_self() == g_ibus_thread_id)
-        commit_idle(&j);                              /* already on the IBus thread */
-    else
-        g_main_context_invoke(g_ctx, commit_idle, &j);  /* cross-thread: synchronous */
-    return j.done != 0;
+    if (!g_ctx || !g_atomic_pointer_get(&g_engine)) return false;   /* fast-out if inactive */
+    struct commit_job *j = malloc(sizeof *j);
+    if (!j) return false;
+    j->text = strdup(utf8);
+    j->done = 0;
+    if (g_ibus_thread_id && g_thread_self() == g_ibus_thread_id) {
+        commit_idle(j);                                   /* already on the IBus thread */
+    } else {
+        g_main_context_invoke(g_ctx, commit_idle, j);     /* async: queues on the GLib loop */
+        for (int i = 0; i < 500 && !j->done; i++)         /* wait for dispatch (≤0.5 s) so the
+                                                           * commit flushes + no uinput double-fire */
+            g_usleep(1000);
+    }
+    bool ok = j->done;
+    free(j->text);
+    free(j);
+    return ok;
 }
 
 /* Restore the user's previous engine (shutdown). Marshaled to the GLib thread. */

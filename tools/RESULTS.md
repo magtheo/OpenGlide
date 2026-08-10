@@ -155,9 +155,9 @@ Mechanism / gotchas:
 
 Mechanism findings:
 - **External `ibus engine openglide` fails** ("Cannot find engine") — a runtime `register_component` isn't visible to ibus-daemon's external `SetGlobalEngine` resolver. But the **in-process** `set_global_engine_async` on the registering connection works (the probe's proven path) — so the app self-activates.
-- **GLib/Qt event loops don't mix** — IBus runs in its own thread with a dedicated `GMainContext` (the bus is bound to it via `push_thread_default` before `ibus_bus_new`). Cross-thread commits marshal via `g_main_context_invoke` (synchronous across threads); when already on the IBus thread it dispatches inline (same-thread `invoke` only queues).
+- **GLib/Qt event loops don't mix** — IBus runs in its own thread with a dedicated `GMainContext` (the bus is bound to it via `push_thread_default` before `ibus_bus_new`). Cross-thread commits marshal via `g_main_context_invoke`, which is **asynchronous here** (it returns before the source dispatches) — so `og_ibus_commit` heap-allocates the job (+ `strdup`s the text) and **waits for dispatch** (polls `done`, ≤0.5 s). A stack job dangles: that was the first crash — `commit_idle` ran after the caller returned, `strlen`'d the freed text → SIGSEGV in `ibus_text_new_from_string`.
 - **Pass-through key forwarding** (`ibus_engine_forward_key_event` in `process_key_event`) is required so the active engine doesn't absorb physical keys — otherwise self-activating would break normal typing.
-- **Commit at `enable`, not on a timer** — focus can drift between `enable` and a delayed commit (the engine disables), so the self-test commits inline at `enable` (the probe's timing).
+- **The engine pointer can dangle across threads too** — `g_engine` is set in `enable`/cleared in `disable` (GLib thread). Reading it on the Qt thread and passing it to `commit_idle` races with disable (use-after-free). Fix: `commit_idle` re-reads `g_engine` *itself* on the GLib thread (serialized with enable/disable → valid-or-NULL, never dangling). If the engine disabled between the caller's check and dispatch (focus drifted), `commit_idle` sees NULL → safe no-op → Injector falls back to `uinput`.
 
 ## How to run on another session
 ```
