@@ -112,6 +112,17 @@ bool Injector::commit(const QString &word) {
     return true;
 }
 
+bool Injector::commitExact(const QString &s) {
+    // Undo path: commit the exact deleted string (no added space) as ONE IBus op —
+    // per-char typeChar was 6 round-trips per word, slow + racey mid-gesture.
+    if (og_ibus_active()) {
+        if (og_ibus_commit(s.toUtf8().constData())) return true;
+    }
+    if (m_fd < 0 && !setup()) return false;
+    for (const QChar qc : s) rawType(QString(qc));
+    return true;
+}
+
 bool Injector::ibusActive() const { return og_ibus_active(); }
 void Injector::backspace(int n) {
     if (n <= 0) return;

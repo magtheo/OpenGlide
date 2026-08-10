@@ -45,8 +45,10 @@ static gpointer test_thread(gpointer p) {
     g_usleep(100000);   /* 100 ms: let the focused sink settle */
     bool c = og_ibus_commit("abcde");
     g_usleep(50000);
-    bool b = og_ibus_backspace(2);   /* delete "de" -> expect "abc" */
-    fprintf(stderr, "[openglide-ibus] TEST commit=%d backspace=%d (expect 'abc')\n", c, b);
+    bool b = og_ibus_backspace(2);   /* delete "de" -> "abc" */
+    g_usleep(50000);
+    bool r = og_ibus_commit("xy");   /* commit AFTER delete (the undo path) -> expect "abcxy" */
+    fprintf(stderr, "[openglide-ibus] TEST commit=%d bs=%d recommit=%d (expect 'abcxy')\n", c, b, r);
     return NULL;
 }
 static void og_enable(IBusEngine *engine) {

@@ -100,7 +100,7 @@ Window {
     }
     function undoWord(s) {                        // swipe-right: re-inject a staged deletion verbatim
         candidates = []; lastWord = "";
-        for (var k = 0; k < s.length; k++) injector.typeChar(s[k]);
+        injector.commitExact(s);   // one IBus commit of the exact deleted string (per-char typeChar was slow/racey mid-gesture)
         injected += s;
     }
     function correct(i) {

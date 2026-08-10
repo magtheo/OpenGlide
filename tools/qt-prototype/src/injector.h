@@ -12,6 +12,8 @@ public:
     ~Injector();
     // Type `word` as a sequence of key events into whatever holds keyboard focus.
     Q_INVOKABLE bool commit(const QString &word);
+    // Commit an exact string verbatim (no added trailing space) — used by undo.
+    Q_INVOKABLE bool commitExact(const QString &s);
     // Delete `n` characters (Backspace) from the focused field — used by one-click correction.
     Q_INVOKABLE void backspace(int n);
     // Type a single character (letter/digit/space/comma/period/…) — no trailing space.
