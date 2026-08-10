@@ -31,7 +31,7 @@ public:
 private:
     std::unique_ptr<executorch::extension::Module> mod_;
     size_t n_words_ = 0;          // dict size (trie word-ends), for the ready log
-    double freq_lambda_ = 1.0;      // prior weight; corpus-stable 0..2, 1.0 breaks good/god ties
+    double freq_lambda_ = 0.0;      // frequency prior weight (0=off — net-negative: e.g. help>hello)
     std::unordered_map<std::string, double> freq_;   // word -> log(count) (frequency prior)
 
     // --- Prefix-shared CTC decode over a dictionary trie ---

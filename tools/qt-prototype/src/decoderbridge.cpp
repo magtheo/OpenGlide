@@ -2,6 +2,7 @@
 #include "swipe_engine.h"
 
 #include <QCoreApplication>
+#include <cstdio>
 #include <QDir>
 #include <QFileInfo>
 #include <QMetaObject>
@@ -79,6 +80,9 @@ void DecoderBridge::decode(const QVariantList &points) {
         std::vector<Candidate> cands = eng->decode(pts, &greedy);
         const double ms = std::chrono::duration<double, std::milli>(
                               std::chrono::steady_clock::now() - t0).count();
+        std::fprintf(stderr, "[decode] greedy=\"%s\" %.0fms:", greedy.c_str(), ms);
+        for (const Candidate &c : cands) std::fprintf(stderr, " %s(%.2f)", c.text.c_str(), c.score);
+        std::fputc('\n', stderr);
         QVariantList ql;
         for (const Candidate &c : cands) {
             QVariantMap vm;

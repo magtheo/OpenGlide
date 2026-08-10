@@ -25,6 +25,7 @@ static constexpr int T_OUT = 32;    // emission timesteps
 static constexpr int VOCAB = 65;    // 26 letters + blank@64
 static constexpr int BLANK = 64;
 static constexpr double NEG = -1e18;
+static constexpr float DOUBLE_LETTER_BONUS = 4.5f;  // recover doubled letters the glide collapses (good<-god, hello<-helo)
 
 static double lae(double a, double b) {  // logaddexp; exact: max + log1p(exp(-|d|))
     if (a <= NEG) return b;
@@ -190,6 +191,20 @@ void SwipeEngine::score_dfs(TrieNode* node, const double* pL, const double* pB,
     }
 }
 
+// True if `word` is `greedy` with exactly one letter doubled: collapsing one
+// adjacent-identical pair in `word` yields `greedy`. The glide passes a doubled
+// key once so the model emits a single letter — this recovers good<-god, hello<-helo.
+static bool is_greedy_with_double(const std::string& word, const std::string& greedy) {
+    if (word.size() != greedy.size() + 1) return false;
+    for (size_t k = 0; k + 1 < word.size(); k++) {
+        if (word[k] == word[k + 1]) {
+            std::string collapsed = word.substr(0, k) + word.substr(k + 1);
+            if (collapsed == greedy) return true;
+        }
+    }
+    return false;
+}
+
 std::vector<Candidate> SwipeEngine::decode(const std::vector<SwipePoint>& pts, std::string* greedy_out) {
     std::vector<Candidate> result;
     if (!ready_ || pts.size() < 4) return result;
@@ -238,6 +253,11 @@ std::vector<Candidate> SwipeEngine::decode(const std::vector<SwipePoint>& pts, s
         prefix.assign(1, (char)('a' + c->letter));
         score_dfs(c.get(), nullptr, aB0, false, (int8_t)-1, em, alph, glen, maxwlen, prefix, scored);
     }
+    // Double-letter recovery: boost candidates that are the greedy with one
+    // letter doubled (good<-god, hello<-helo) — the targeted fix the frequency
+    // prior can't provide (e.g. "help" beats "hello" on both CTC and frequency).
+    for (auto& s : scored)
+        if (is_greedy_with_double(s.second, g)) s.first += DOUBLE_LETTER_BONUS;
     std::sort(scored.begin(), scored.end(),
               [](const auto& a, const auto& b) { return a.first > b.first; });
     for (int i = 0; i < 5 && i < (int)scored.size(); i++)
