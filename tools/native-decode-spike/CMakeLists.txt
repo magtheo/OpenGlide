@@ -30,3 +30,7 @@ target_link_libraries(swipe_engine PUBLIC ${ET_LIBS})
 # 3. corpus accuracy + latency test
 add_executable(corpus_test corpus_test.cpp)
 target_link_libraries(corpus_test PRIVATE swipe_engine)
+
+# 4. personalization persistence test (bump -> save -> file)
+add_executable(test_userfreq test_userfreq.cpp)
+target_link_libraries(test_userfreq PRIVATE swipe_engine)

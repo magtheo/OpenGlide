@@ -44,7 +44,8 @@ static float interp1(float q, const std::vector<float>& x, const std::vector<flo
 }
 
 SwipeEngine::SwipeEngine(const std::string& model_path, const std::string& dict_path,
-                         const std::string& freq_path) {
+                         const std::string& freq_path,
+                         const std::string& user_freq_path) {
     // QWERTY key centres in a..z order (validate.py QWERTY, LETTERS=sorted).
     static const float C[26][2] = {
         {0.10f, 0.500f}, {0.60f, 0.833f}, {0.40f, 0.833f}, {0.30f, 0.500f}, {0.25f, 0.167f},
@@ -60,9 +61,41 @@ SwipeEngine::SwipeEngine(const std::string& model_path, const std::string& dict_
     mod_ = std::make_unique<Module>(model_path);
     if (mod_->load() != Error::Ok) { std::fprintf(stderr, "[swipe] model load failed\n"); return; }
     if (!freq_path.empty()) load_freq(freq_path);   // prior (good>god) — before dict so logfreq is set
+    if (!user_freq_path.empty()) { user_freq_path_ = user_freq_path; load_user_freq(user_freq_path); }
     load_dict(dict_path);
     ready_ = true;
     std::fprintf(stderr, "[swipe] ready: %zu dict words\n", n_words_);
+}
+
+void SwipeEngine::bump(const std::string& word) {
+    if (word.empty()) return;
+    {
+        std::lock_guard<std::mutex> lk(user_freq_mu_);
+        user_freq_[word] += 1;
+    }
+    save_user_freq();   // persist immediately — SIGTERM/crash skips the dtor
+}
+
+void SwipeEngine::save_user_freq() {
+    if (user_freq_path_.empty()) return;
+    std::ofstream f(user_freq_path_);
+    if (!f) return;
+    std::lock_guard<std::mutex> lk(user_freq_mu_);
+    for (const auto& kv : user_freq_) f << kv.first << "\t" << kv.second << "\n";
+}
+
+void SwipeEngine::load_user_freq(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        auto tab = line.find('\t');
+        if (tab == std::string::npos) continue;
+        std::string w = line.substr(0, tab);
+        long c = std::strtol(line.c_str() + tab + 1, nullptr, 10);
+        if (c > 0 && !w.empty()) user_freq_[w] = c;
+    }
+    std::fprintf(stderr, "[swipe] user freq: %zu words loaded\n", user_freq_.size());
 }
 
 void SwipeEngine::load_dict(const std::string& path) {
@@ -258,6 +291,16 @@ std::vector<Candidate> SwipeEngine::decode(const std::vector<SwipePoint>& pts, s
     // prior can't provide (e.g. "help" beats "hello" on both CTC and frequency).
     for (auto& s : scored)
         if (is_greedy_with_double(s.second, g)) s.first += DOUBLE_LETTER_BONUS;
+    // Personalization: favor words the user actually uses. Snapshot under lock
+    // (bump() runs on the UI thread) + add user_lambda*log(count+1) before ranking.
+    std::unordered_map<std::string, long> usnap;
+    { std::lock_guard<std::mutex> lk(user_freq_mu_); usnap = user_freq_; }
+    if (!usnap.empty()) {
+        for (auto& s : scored) {
+            auto it = usnap.find(s.second);
+            if (it != usnap.end()) s.first += (float)(user_lambda_ * std::log((double)it->second + 1.0));
+        }
+    }
     std::sort(scored.begin(), scored.end(),
               [](const auto& a, const auto& b) { return a.first > b.first; });
     for (int i = 0; i < 5 && i < (int)scored.size(); i++)

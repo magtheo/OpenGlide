@@ -42,12 +42,20 @@ static QString resolveFreq() {
     return {};
 }
 
+// Per-user word counts (personalization) -> ~/.local/share/openglide/user_freq.tsv.
+static QString resolveUserFreq() {
+    QDir d(QDir::homePath() + "/.local/share/openglide");
+    d.mkpath(".");   // ensure the dir exists
+    return d.absoluteFilePath("user_freq.tsv");
+}
+
 DecoderBridge::DecoderBridge(QObject *parent) : QObject(parent) {
     // Load synchronously (~0.1-0.3 s: model load is ~0.1 ms; dictionary load
     // dominates). Brief, at startup, before the window is interactive.
     m_eng = std::make_shared<SwipeEngine>(resolveModel().toStdString(),
                                           "/usr/share/dict/american-english",
-                                          resolveFreq().toStdString());
+                                          resolveFreq().toStdString(),
+                                          resolveUserFreq().toStdString());
     m_ready = m_eng->ready();
     // Defer the signal so QML (connected after construction) observes the state.
     QTimer::singleShot(0, this, [this] {
@@ -56,7 +64,13 @@ DecoderBridge::DecoderBridge(QObject *parent) : QObject(parent) {
     });
 }
 
-DecoderBridge::~DecoderBridge() = default;
+DecoderBridge::~DecoderBridge() {
+    if (m_eng) m_eng->save_user_freq();   // persist personalization on shutdown
+}
+
+void DecoderBridge::bumpWord(const QString &word) {
+    if (m_eng) m_eng->bump(word.toStdString());
+}
 
 void DecoderBridge::decode(const QVariantList &points) {
     if (!m_ready || !m_eng) return;

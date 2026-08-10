@@ -19,6 +19,8 @@ public:
 
     // points: [{x,y,t}, ...] with t in ms. Returns via candidatesReady().
     Q_INVOKABLE void decode(const QVariantList &points);
+    // Personalization: record that the user used/chose `word` (boosts it in future decodes).
+    Q_INVOKABLE void bumpWord(const QString &word);
 
 signals:
     void readyChanged();

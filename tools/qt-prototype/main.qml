@@ -71,7 +71,7 @@ Window {
     Timer { interval: 800; repeat: true; running: visible; onTriggered: ibusActive = injector.ibusActive() }
 
     // ---- injection ops (each keeps `injected` in sync with the target field) ----
-    function commitDecoded(word) { injector.commit(word); injected += word + " "; lastWord = word; }
+    function commitDecoded(word) { injector.commit(word); injected += word + " "; lastWord = word; decoder.bumpWord(word); }
     function tapSpace()          { injector.typeChar(" "); injected += " "; }
     function tapPunct(p) {                       // collapse a preceding space, then "p "
         if (injected.length && injected[injected.length - 1] === " ") {
@@ -114,6 +114,7 @@ Window {
         injector.commit(nw);
         injected += nw + " ";
         lastWord = nw;
+        decoder.bumpWord(nw);   // personalization: the user chose this word — boost it
     }
     function nearestKey(nx, ny) {                 // for key-pop: closest key to the cursor, in pixels
         var best = "", bestD = 1e9, W = kb.width, H = kb.height;
