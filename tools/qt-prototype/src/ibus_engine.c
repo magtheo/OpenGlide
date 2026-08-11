@@ -75,20 +75,16 @@ static void og_disable(IBusEngine *engine) {
  *   pass     — return FALSE. "Not mine" — IBus delivers it down the normal path,
  *              so the compositor and the client both see the real event.
  *
- * `auto` (default) is the empirical compromise we know works: pass Super combos,
- * forward everything else. But if `pass` turns out to deliver ordinary keys too,
- * the whole synthetic-forward path can go away and every compositor shortcut is
- * fixed at once — rather than one modifier at a time. RESULTS.md recorded that
- * forwarding was *required* for normal typing, but the Super fix is evidence
- * that FALSE does reach its destination, so that finding deserves a re-test.
+ * `pass` (default) returns FALSE for every key — "not mine" — so IBus delivers it
+ * down the normal path and BOTH the compositor and the client see the real event.
+ * Verified on hardware: ordinary typing, Super+1 (dock) and Alt+Tab all work, so
+ * this fixes every compositor shortcut at once (Super+1 used to type "1" under the
+ * old forward path, which re-injects a synthetic event the compositor never sees).
+ * `forward` and `auto` stay as opt-in fallbacks in case pass misbehaves elsewhere.
  *
- *   OPENGLIDE_KEY_ROUTING=pass      -> return FALSE for everything (THE EXPERIMENT)
- *   OPENGLIDE_KEY_ROUTING=forward   -> old behaviour, forward everything (control)
- *   OPENGLIDE_KEY_ROUTING=auto      -> default: pass Super, forward the rest
- *
- * Run with `pass` and check, in order: (1) can you still type normally into a
- * focused field, (2) does Super+1 work, (3) does Alt+Tab work. If all three hold,
- * make `pass` the default and delete the forward path. */
+ *   OPENGLIDE_KEY_ROUTING=pass      -> return FALSE for everything (DEFAULT)
+ *   OPENGLIDE_KEY_ROUTING=forward   -> forward everything (old behaviour, fallback)
+ *   OPENGLIDE_KEY_ROUTING=auto      -> pass Super, forward the rest (old default) */
 enum { OG_ROUTE_AUTO = 0, OG_ROUTE_PASS, OG_ROUTE_FORWARD };
 static int g_key_routing = -1;      /* resolved once, on first key */
 static int g_log_content = -1;      /* content logging opt-in (ADR-0004) */
@@ -117,8 +113,8 @@ static int og_key_routing(void) {
         const char *v = getenv("OPENGLIDE_KEY_ROUTING");
         if (v && strcmp(v, "pass") == 0)         g_key_routing = OG_ROUTE_PASS;
         else if (v && strcmp(v, "forward") == 0) g_key_routing = OG_ROUTE_FORWARD;
-        else                                     g_key_routing = OG_ROUTE_AUTO;
-        if (g_key_routing != OG_ROUTE_AUTO)
+        else                                     g_key_routing = OG_ROUTE_PASS;  /* default — verified on hardware */
+        if (g_key_routing != OG_ROUTE_PASS)
             fprintf(stderr, "[openglide-ibus] key routing = %s (non-default)\n", v);
     }
     return g_key_routing;
@@ -204,9 +200,13 @@ bool og_ibus_start(void) {
 bool og_ibus_connected(void) { return g_atomic_int_get(&g_connected) != 0; }
 bool og_ibus_active(void)    { return g_atomic_pointer_get(&g_engine) != NULL; }
 
-/* Heap-allocated: g_main_context_invoke is asynchronous here, so the job must
- * outlive the caller's stack frame. The caller frees it after observing done. */
-struct commit_job { char *text; volatile int done; };
+/* Heap-allocated + FIRE-AND-FORGET: g_main_context_invoke is asynchronous here, so
+ * the job must outlive the caller's stack frame — the idle frees it. Never blocks
+ * the Qt/UI thread: on the slow T460s a stalled GLib thread let the old ≤0.5 s
+ * wait-loop pile up across glide commits and freeze the session. Ordering holds
+ * (GLib dispatches invoke sources FIFO), and the injector skips its uinput
+ * fallback whenever the engine is active, so a queued commit can't double-fire. */
+struct commit_job { char *text; };
 static gboolean commit_idle(gpointer p) {
     struct commit_job *j = (struct commit_job *)p;
     /* Re-read g_engine HERE (GLib thread): enable/disable also run on this thread,
@@ -218,8 +218,9 @@ static gboolean commit_idle(gpointer p) {
         g_object_ref_sink(t);   /* sink the floating ref so the unref below is valid */
         ibus_engine_commit_text(e, t);
         g_object_unref(t);
-        j->done = 1;
     }
+    free(j->text);   /* fire-and-forget: the idle owns + frees the job */
+    free(j);
     return G_SOURCE_REMOVE;
 }
 bool og_ibus_commit(const char *utf8) {
@@ -227,19 +228,11 @@ bool og_ibus_commit(const char *utf8) {
     struct commit_job *j = malloc(sizeof *j);
     if (!j) return false;
     j->text = strdup(utf8);
-    j->done = 0;
-    if (g_ibus_thread_id && g_thread_self() == g_ibus_thread_id) {
-        commit_idle(j);                                   /* already on the IBus thread */
-    } else {
-        g_main_context_invoke(g_ctx, commit_idle, j);     /* async: queues on the GLib loop */
-        for (int i = 0; i < 500 && !j->done; i++)         /* wait for dispatch (≤0.5 s) so the
-                                                           * commit flushes + no uinput double-fire */
-            g_usleep(1000);
-    }
-    bool ok = j->done;
-    free(j->text);
-    free(j);
-    return ok;
+    if (g_ibus_thread_id && g_thread_self() == g_ibus_thread_id)
+        commit_idle(j);                                  /* already on the GLib thread */
+    else
+        g_main_context_invoke(g_ctx, commit_idle, j);   /* async: queued, dispatched in order */
+    return true;   /* queued — never blocks the caller */
 }
 
 /* Delete n chars via the engine (delete_surrounding_text — the IME delete API;
