@@ -92,22 +92,39 @@ settles the layout, resize, and visibility model. Ordered work:
    the letter block's outer edge — grabbing a resize handle instead of starting a
    glide on Q or P would be worse than the bug it fixes.
    Still open here: snap-to-edge / docked mode.
-3. **Visibility model** — Full / Collapsed ✅ (`×` collapses to a draggable puck;
-   quit moved into the ⋯ menu, so no single click can terminate a mouse-only
-   session). **Hidden** state + the spec §13.1 LMB+RMB evdev chord (observe-only,
-   ADR-0004) + tray + configurable toggle are still to do.
-4. **Aspect-ratio band** — now that `u` and `rowH` are independent the block
-   fills any window shape, so this is the live risk: measure what letter-block
-   aspects the decoder tolerates (capture at 10:3 / 10:4 / 10:2.2, compare to the
-   94% corpus baseline) and clamp resizing to it. The current aspect is surfaced
-   in the diagnostics overlay so the measurement has something to read.
+3. ~~**Visibility model**~~ ✅ — Full / Collapsed / Hidden. `×` collapses to a
+   draggable puck; quit moved into the ⋯ menu, so no single click can terminate a
+   mouse-only session. **Hidden** (spec §13.5, no surface at all) is reached from
+   the ⋯ menu and returns via `ToggleListener`: a worker thread watching raw
+   evdev mouse buttons for the §13.1 LMB+RMB chord (second button within 150 ms,
+   both held 300 ms), **observe-only — never `EVIOCGRAB`** (ADR-0004). Mode
+   (`chord`/`middle`/`mouse4`/`mouse5`) and timings come from settings (§13.6).
+   Hide is offered **only when the listener is actually running** — if
+   `/dev/input` isn't readable the menu entry is disabled and says so, because
+   hiding with no way back is the `×`-quits trap again, just slower to find.
+   Still to do here: tray entry, a settings UI for §13.6, and the §13.3 question
+   (the chord isn't suppressed, so the app underneath still sees left+right —
+   live with it before building an interception layer).
+4. **Aspect-ratio band** — the pre-check is built: `corpus_test --sweep`
+   re-projects the corpus onto blocks from 10:5 to 10:1.8 and prints top-1 per
+   aspect (`reaspect()` scales only the momentum-driven deviation, since key
+   centres are at fixed normalized positions). **Someone has to run it** — it
+   needs the model + ExecuTorch build. Then clamp the window's resize range to
+   the rows that hold, and confirm with real glides captured at the edge
+   aspects. The live aspect is shown in the diagnostics overlay.
 5. **History bar** (§9.3) in the reclaimed space; caret avoidance via the unused
    `set_cursor_location` IBus vfunc.
 
-> ⚠️ Steps 0–2 were written on a box with no Qt Quick and no ExecuTorch. `main.qml`
-> is qmllint-clean and the C++ passes `-fsyntax-only` against real Qt 6 headers,
-> but **none of it has been compiled or rendered**. First build on hardware is the
-> gate (ADR-0005).
+> ⚠️ Steps 0–2 are **built and tested on hardware** (magtheo, 2026-08-11) — plus a
+> follow-up fix there: `og_ibus_backspace` was blocking the UI thread up to 500 ms
+> per delete, which piled up under hold-⌫ repeat and froze the session; it is now
+> fire-and-forget.
+> Step 3 and the step-4 harness were written on a box with **no Qt Quick and no
+> ExecuTorch**: qmllint-clean, `-fsyntax-only` clean against real Qt 6 headers,
+> and the two pieces of non-trivial logic are unit-tested standalone (the chord
+> state machine, 13 cases incl. "ordinary clicking never fires" and "a long glide
+> then a right-click never fires"; the aspect re-projection, 5 cases). But
+> **nothing new has been compiled or rendered.**
 
 Also Phase 2 per spec §28: ~~personalization~~ ✅, personal dictionary, SQLite,
 punctuation, settings UI.

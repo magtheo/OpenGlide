@@ -28,7 +28,8 @@ cd ../../third_party/executorch && git submodule update --init --depth 1 \
 - `spike` — replays Python's exact input tensors, runs native `forward`, asserts
   greedy == `computer` and `max|diff| < 1e-3` vs Python. (The risk gate.)
 - `swipe_engine` — static lib: the reusable native decoder.
-- `corpus_test` — accuracy + latency over a swipe corpus.
+- `corpus_test` — accuracy + latency over a swipe corpus, plus `--sweep`: the
+  ADR-0005 aspect-ratio pre-check (see below).
 
 ## Run
 ```
@@ -38,6 +39,27 @@ MODEL=$(ls ../../tools/futo-spike/models/hub/models--futo-org--futo-swipe/snapsh
 .venv/bin/python dump_corpus.py ../../tools/futo-spike/corpus-controlled.jsonl /tmp/corpus_flat.txt
 ./build/corpus_test "$MODEL" /usr/share/dict/american-english /tmp/corpus_flat.txt
 ```
+
+### Aspect-ratio band (ADR-0005 step 4)
+The window now resizes freely, so the letter block is no longer pinned at 10:3.
+How far it can drift before decode degrades is an open verification gate:
+```
+./build/corpus_test "$MODEL" /usr/share/dict/american-english /tmp/corpus_flat.txt --sweep
+./build/corpus_test "$MODEL" /usr/share/dict/american-english /tmp/corpus_flat.txt --aspect 10:2.2
+```
+`--sweep` re-projects each recorded glide onto blocks from 10:5 to 10:1.8 and
+prints top-1 per aspect; clamp the window's resize range to the rows that hold
+within noise of the 10:3 baseline.
+
+**What the re-projection does and does not model.** Key centres are at fixed
+*normalized* positions and the user aims at keys, so the intended path is
+unchanged by a resize; what changes is what physical mouse momentum produces —
+wobble and overshoot — because normalizing by a shorter block magnifies it in y.
+So `reaspect()` splits y into a locally-straight component and a deviation, and
+scales only the deviation by `k = target_aspect / (10/3)`. It assumes the user
+re-aims perfectly and does not change speed, and its high-pass is crude. **It is
+a pre-check that narrows where to look, not the gate** — real glides captured at
+the edge aspects close that.
 
 ## Verified (2026-08-09)
 - spike: native `forward` == Python to **3.8e-6**; greedy `computer`. **PASS**

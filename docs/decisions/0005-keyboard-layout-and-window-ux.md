@@ -1,7 +1,7 @@
 # ADR-0005: One grid unit drives the whole surface; the window collapses, never quits
 
-- **Status:** Accepted* — steps 0–2 implemented in `tools/qt-prototype`; the
-  aspect-band and on-hardware gates below are still open
+- **Status:** Accepted* — steps 0–3 implemented in `tools/qt-prototype` (0–2
+  verified on hardware 2026-08-11); the aspect-band gate below is still open
 - **Date:** 2026-08-10
 - **Supersedes:** none (implements spec §2.1 "resizable keyboard", §7.3/§7.4,
   §13, §23; refines the Phase 2 "resize controls / floating / docking" line in
@@ -280,8 +280,12 @@ reported caret rectangle instead of covering the text being typed.
       dict top-1 against the 94% baseline of
       `tools/futo-spike/corpus-controlled.jsonl` using
       `tools/native-decode-spike/corpus_test.cpp`. Record the band where top-1
-      holds within noise, in RESULTS.md. Cheap pre-check first: replay the
-      existing corpus with vertical overshoot rescaled by the aspect change.
+      holds within noise, in RESULTS.md. The pre-check is now one command —
+      `corpus_test … --sweep` re-projects the existing corpus onto blocks from
+      10:5 to 10:1.8 and prints top-1 per aspect — but **it still needs running**
+      (it wants the model + an ExecuTorch build). It assumes the user re-aims
+      perfectly and does not change speed, so it narrows the range the real
+      captures must cover; it does not close this gate on its own.
 - [ ] **Zero-diff model inputs.** After the wings/action-row change, assert the
       26 normalized letter centers are byte-identical to F3, and re-run
       `corpus_test` for an unchanged 17/18.
@@ -289,12 +293,17 @@ reported caret rectangle instead of covering the text being typed.
       `surface-probe` focus check (RESULTS.md §surface-probe) against Full,
       Collapsed, and post-restore-from-Hidden — `WindowDoesNotAcceptFocus` is
       verified on XWayland today but not for a window that hides and re-shows.
-- [ ] **It builds and renders.** Steps 0–2 were written against a machine with no
-      Qt Quick and no ExecuTorch: `main.qml` is qmllint-clean (identical warning
-      profile to the previous version apart from the three new `SwipeSurface`
-      properties qmllint cannot resolve), and `appsettings/swipesurface/
-      decoderbridge` pass `g++ -fsyntax-only` against real Qt 6 headers — but
-      nothing has been compiled or rendered. First run on hardware is the gate.
+- [x] **Steps 0–2 build and render.** Verified on hardware 2026-08-11. One defect
+      surfaced and was fixed there: `og_ibus_backspace` blocked the caller up to
+      500 ms per delete, which under hold-⌫ repeat (70 ms) piled up and froze the
+      session; it is now fire-and-forget, ordered by D-Bus.
+- [ ] **Step 3 builds and renders.** `ToggleListener` and the Hidden state were
+      written on a machine with no Qt Quick: qmllint-clean, `-fsyntax-only` clean
+      against real Qt 6 headers, and the chord state machine passes 13 standalone
+      cases (both orders fire; ordinary clicks, two separate clicks, a late second
+      button, an early release, and a long LMB glide followed by RMB all do not;
+      one chord fires exactly once and re-arms only after a full release). Not yet
+      compiled or run against a real `/dev/input`.
 - [ ] **The mouse-only loop closes.** With no physical keyboard touched:
       collapse, restore, resize by preset, resize by grip, move, dock, hide, and
       restore from hidden. Any step that requires a keyboard is a failure of

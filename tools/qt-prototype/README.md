@@ -62,6 +62,16 @@ target app (spec §17) — confirmed on XWayland.
 - **Key geometry is loaded, not hard-coded** (spec §7.2): `languages/en/layout.json`
   → `SwipeEngine::set_layout()` → read back → `decoder.keys` → QML. One file, both
   consumers. A malformed layout is rejected whole and the built-in QWERTY stands.
+- **Show/hide (spec §13)**: three states — Full, Collapsed (the puck), and Hidden
+  (no surface at all). Hidden is reached from ⋯ and returns via `ToggleListener`
+  (`src/togglelistener.{h,cpp}`), a worker thread watching raw evdev mouse buttons
+  for the LMB+RMB chord — second button within 150 ms, both held 300 ms, either
+  order. **Observe-only: never `EVIOCGRAB`** (ADR-0004), so the app underneath
+  still sees the clicks; whether that is annoying enough to justify interception
+  is the §13.3 question, to be answered by using it. Needs read access to
+  `/dev/input/event*` (group `input`); without it the Hide entry is disabled and
+  says why, because hiding with no way back is the same trap as a one-click quit.
+  Mode (`chord`/`middle`/`mouse4`/`mouse5`) and timings are read from settings.
 - **Shift + symbols**: shift cycles off/once/lock; `?123` swaps in a symbols layer
   on the same three-row grid (tap-only — gliding is disabled there). Note the
   uinput fallback can only type ASCII it has evdev codes for; the symbols layer

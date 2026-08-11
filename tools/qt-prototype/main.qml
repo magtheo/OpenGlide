@@ -120,6 +120,15 @@ Window {
     Timer { interval: 1000; repeat: true; running: !decoder.ready && win.visible; onTriggered: win.warmupSecs += 1 }
     Timer { interval: 800; repeat: true; running: win.visible; onTriggered: win.ibusActive = injector.ibusActive() }
 
+    // Human-readable name for the configured global gesture (spec §13.6).
+    function toggleGesture() {
+        const m = toggleListener.mode;
+        if (m === "middle") return "middle click";
+        if (m === "mouse4") return "Mouse4";
+        if (m === "mouse5") return "Mouse5";
+        return "hold L+R";
+    }
+
     // ================= shift =================
     function shifted(c) { return shiftState > 0 ? c.toUpperCase() : c; }
     function consumeShift() { if (shiftState === 1) shiftState = 0; }
@@ -221,6 +230,31 @@ Window {
         if (collapsed) return;
         width = w; height = h; menuOpen = false;
     }
+    // Hidden (spec §13.5): no surface at all, process resident, the global evdev
+    // listener still watching. Only ever offered when that listener is actually
+    // running — hiding with no way back would be the same trap as a one-click
+    // quit, just slower to discover.
+    function hideCompletely() {
+        if (!toggleListener.available) return;
+        menuOpen = false;
+        persistGeometry();
+        visible = false;
+    }
+    function unhide() {
+        visible = true;
+        raise();
+    }
+    function toggleVisibility() {
+        if (!visible) unhide();
+        else if (toggleListener.available) hideCompletely();
+        else collapse();     // no listener: collapse is the reversible option
+    }
+
+    Connections {
+        target: toggleListener
+        function onToggleRequested() { win.toggleVisibility() }
+    }
+
     function persistGeometry() {
         if (!collapsed) {
             settings.setValue("window/width", width);
@@ -647,6 +681,7 @@ Window {
                 elide: Text.ElideRight
                 text: win.stateText() + "   ·   aspect " + win.letterAspect.toFixed(2)
                       + "   ·   " + decoder.layoutId
+                      + "   ·   toggle: " + toggleListener.status
                       + "   ·   ⌨ " + (win.injected.length ? win.injected.replace(/\s+$/, "") : "—")
                 color: pal.committedText
                 font.pixelSize: Math.max(7, win.u * 0.20); font.family: "monospace"
@@ -673,27 +708,38 @@ Window {
                         {g: "Small  · 440×220",  act: "s"},
                         {g: "Medium · 560×280",  act: "m"},
                         {g: "Large  · 720×360",  act: "l"},
+                        {g: "Hide completely",   act: "hide"},
                         {g: "Diagnostics",       act: "diag"},
                         {g: "Quit OpenGlide",    act: "quit"}
                     ]
                     Rectangle {
+                        readonly property bool disabled: modelData.act === "hide" && !toggleListener.available
                         width: parent.width; height: win.u * 0.62
-                        color: mi.containsMouse ? pal.candBar : "#ffffff"
+                        color: mi.containsMouse && !disabled ? pal.candBar : "#ffffff"
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
                             x: win.u * 0.22
-                            text: modelData.act === "diag" && win.showDiagnostics ? "✓ " + modelData.g : modelData.g
+                            width: parent.width - x * 2
+                            elide: Text.ElideRight
+                            text: modelData.act === "diag" && win.showDiagnostics ? "✓ " + modelData.g
+                                  : modelData.act === "hide" ? (toggleListener.available
+                                        ? "Hide · " + win.toggleGesture() + " to return"
+                                        : "Hide — needs /dev/input access")
+                                  : modelData.g
                             font.pixelSize: Math.max(8, win.u * 0.21)
-                            color: modelData.act === "quit" ? "#c5221f" : pal.keyText
+                            color: parent.disabled ? "#9aa0a6"
+                                   : modelData.act === "quit" ? "#c5221f" : pal.keyText
                         }
                         MouseArea {
                             id: mi
                             anchors.fill: parent; hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
+                            cursorShape: parent.disabled ? Qt.ArrowCursor : Qt.PointingHandCursor
                             onClicked: {
+                                if (parent.disabled) return;
                                 if (modelData.act === "s")         win.preset(440, 220);
                                 else if (modelData.act === "m")    win.preset(560, 280);
                                 else if (modelData.act === "l")    win.preset(720, 360);
+                                else if (modelData.act === "hide") win.hideCompletely();
                                 else if (modelData.act === "diag") { win.showDiagnostics = !win.showDiagnostics; win.menuOpen = false; }
                                 else { win.persistGeometry(); Qt.quit(); }
                             }
