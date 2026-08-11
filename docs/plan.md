@@ -140,20 +140,41 @@ settles the layout, resize, and visibility model. Ordered work:
 
 8. **Decode accuracy — the make-or-break** (ADR-0006, current focus). Real glides
    underperform the controlled corpus (94%): a 24-glide live capture missed
-   `coffee→code`, `because→bose`, `mouse→mousse`. Misses split into **rerank-able**
-   (right word was a candidate — `mouse`) and **decode-depth** (right word absent —
-   `coffee`, `because`). Strategy, depth before re-ranking: **(a) decode depth**
-   — wider effective beam, multi-double-letter handling (`coffee` needs ff **and**
-   ee), messy-greedy recovery; **(b) n-gram context rescoring** — the whole-text
-   correction idea, re-ranks the top-K by the previous 1–2 words (n-gram, not
-   neural — viable on the T460s; conservative, to avoid the frequency-prior trap).
-   Both ship as **probes** measured on a fresh ≥30-real-glide corpus before they
-   touch the product decoder.
+   `coffee→code`, `because→bose`, `mouse→mousse`. The miss taxonomy now has a
+   **measuring tool**, not just anecdotes: `corpus_test --diagnose` classifies each
+   miss as rerank-able / length-pruned / alph-pruned / not-in-dict (each points at
+   a *different* fix). ADR-0006 F2 was corrected by reading the code — `coffee` was
+   never a beam problem, it hit a **one-doubling cap** in the bonus (needs `ff`
+   *and* `ee`); `because` is suspected length-pruning. Depth before re-ranking,
+   both as probes: **(a) decode depth** — lever 1a done: `count_doublings()`
+   handles N pairs (tunable `--doublings`, 1 = old / 2 = default), guarded by
+   `doubling_test` (16/16, incl. the `help`/`helo` no-bonus guard that blocks the
+   frequency-prior regression); **(b) n-gram context rescoring** — the whole-text
+   correction idea (n-gram, not neural; conservative). **Open gate:** A/B
+   `--doublings 1` vs `2` + `--diagnose` on a fresh ≥30-real-glide corpus — zero
+   regressions, and the tally settles depth-vs-rescoring priority.
+
+9. **Output ownership + preedit probe** (3c6b226; ADR-0003 single-owner + the
+   deletion wall). Two bugs, one root cause — output had no single owner: a
+   **freeze** (uinput backspace is ~17 ms of real sleeps/char and ran on the UI
+   thread; recent-word correction retypes 70+ chars → >1 s freeze) and an
+   **ordering inversion** (uinput lands immediately, IBus commit queues on GLib →
+   "commit then backspace" could delete before the word arrived). Fix: all four ops
+   (commit / commitExact / typeChar / backspace) queue onto **one worker** in
+   submission order; the UI thread only enqueues; `og_ibus_commit_sync` blocks on
+   the worker (buys ordering back) without freezing. Fire-and-forget was "the
+   right fix at the wrong layer." Also landed: `set_capabilities` reports
+   `IBUS_CAP_PREEDIT_TEXT` per focused client in the diagnostics overlay — the
+   caret-avoidance pattern again (measure what a GTK field / terminal / Electron
+   actually declare before designing a preedit correction model). Preedit is the
+   durable path out of the deletion wall (current word stays uncommitted →
+   correcting it needs no deletion); the readout decides whether it's worth an ADR.
 
 > ⚠️ Steps 0–2 are **built and tested on hardware** (magtheo, 2026-08-11) — plus a
 > follow-up fix there: `og_ibus_backspace` was blocking the UI thread up to 500 ms
-> per delete, which piled up under hold-⌫ repeat and froze the session; it is now
-> fire-and-forget.
+> per delete, which piled up under hold-⌫ repeat and froze the session. First made
+> fire-and-forget, then (2026-08-11) replaced by one serialized output queue on a
+> dedicated worker (item 9) — blocking moved off the UI thread, not removed.
 > Steps 3–5 and the step-4 harness were written on a box with **no Qt Quick and no
 > ExecuTorch**: qmllint-clean, `-fsyntax-only` clean against real Qt 6 headers,
 > and every piece of non-trivial logic is unit-tested standalone — the chord state
