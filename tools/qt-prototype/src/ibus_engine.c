@@ -169,36 +169,30 @@ bool og_ibus_commit(const char *utf8) {
     return ok;
 }
 
-/* Delete n chars via the engine (forward KEY_BACKSPACE). Same IBus path as commit
- * so commit/type/backspace stay ordered at the client — mixing a uinput backspace
- * with IBus commit_text drifts (the root of the delete/undo corruption). */
-struct backspace_job { int n; volatile int done; };
+/* Delete n chars via the engine (delete_surrounding_text — the IME delete API;
+ * forwarding KEY_BACKSPACE isn't reliably applied by clients). FIRE-AND-FORGET:
+ * queued on the GLib thread + returns immediately, so it never blocks the Qt/UI
+ * thread — which under rapid hold-⌫ repeat on slow hardware piled up + froze the
+ * session. Safe because the client owns the cursor and D-Bus preserves order, so
+ * sequential deletes are applied correctly in order; the idle frees the job. */
+struct backspace_job { int n; };
 static gboolean backspace_idle(gpointer p) {
     struct backspace_job *j = (struct backspace_job *)p;
     IBusEngine *e = (IBusEngine *)g_atomic_pointer_get(&g_engine);
-    if (e) {
-        /* delete_surrounding_text is the IME delete API (forwarding KEY_BACKSPACE
-         * is not reliably applied by clients for text editing). -n..0 = the n chars
-         * before the cursor (a backspace run). */
-        ibus_engine_delete_surrounding_text(e, -j->n, (guint)j->n);
-        j->done = 1;
-    }
+    if (e) ibus_engine_delete_surrounding_text(e, -j->n, (guint)j->n);   /* -n..0 = n chars before cursor */
+    free(j);   /* fire-and-forget: the idle owns + frees the job */
     return G_SOURCE_REMOVE;
 }
 bool og_ibus_backspace(int n) {
     if (n <= 0 || !g_ctx || !g_atomic_pointer_get(&g_engine)) return false;
     struct backspace_job *j = malloc(sizeof *j);
     if (!j) return false;
-    j->n = n; j->done = 0;
-    if (g_ibus_thread_id && g_thread_self() == g_ibus_thread_id) {
-        backspace_idle(j);
-    } else {
-        g_main_context_invoke(g_ctx, backspace_idle, j);
-        for (int i = 0; i < 500 && !j->done; i++) g_usleep(1000);
-    }
-    bool ok = j->done;
-    free(j);
-    return ok;
+    j->n = n;
+    if (g_ibus_thread_id && g_thread_self() == g_ibus_thread_id)
+        backspace_idle(j);                              /* already on the GLib thread */
+    else
+        g_main_context_invoke(g_ctx, backspace_idle, j);   /* async: queued, processed in order */
+    return true;   /* queued — never blocks the caller */
 }
 
 /* Restore the user's previous engine (shutdown). Marshaled to the GLib thread. */
