@@ -284,10 +284,14 @@ reported caret rectangle instead of covering the text being typed.
       mechanism RESULTS.md identifies as decode-corrupting — is a smooth
       excursion, so a local line fit treats it as intended and never amplifies it.
       A flat result there is weak evidence about the one failure mode that
-      matters. Close it either by decomposing against the **target word's
-      key-centre polyline** instead of a local line (the corpus already carries
-      the target, and overshoot then registers as deviation), or by capturing real
-      glides at the edge aspects.
+      matters — and is the likeliest reason every row came out identical.
+      **The key-centre-polyline model is now built and is the default**
+      (`--model word`, `reaspect.h`): overshoot lands past the end of the
+      polyline, so it registers as deviation and scales (verified 1.56× at
+      k=1.67, vs 1.00× for the old model, `aspect_model_test.cpp`).
+      **Re-run `--sweep` with it.** If it stays flat, the unclamped decision is
+      real evidence; if not, the band needs clamping. Real glides captured at the
+      edge aspects remain what finally closes this.
 - [ ] **Zero-diff model inputs.** After the wings/action-row change, assert the
       26 normalized letter centers are byte-identical to F3, and re-run
       `corpus_test` for an unchanged 17/18.

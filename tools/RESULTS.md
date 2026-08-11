@@ -193,21 +193,28 @@ dictionary/stroke issue, not a shape one.
 **Decision: resizing stays unclamped** (ADR-0005 §3). Nothing here justifies
 restricting it.
 
-**What this does and does not establish.** The identical result at every aspect
-is partly a property of the simulator, so read it as "this model finds no
-problem", not "proven safe for real hands":
-- `reaspect()` scales the residual from a **locally straight** path. Trailing
-  overshoot — the mechanism this file already identifies as the one that
-  *corrupts* decode — is a smooth, low-frequency excursion, so a local line fit
-  treats it as intended and does **not** amplify it. The dangerous case is
-  therefore under-tested by exactly this transform.
-- It assumes perfect re-aiming at the new key centres and unchanged speed.
-- 18 glides, one writer.
+**⚠️ This run used the `line` model, which cannot see the dangerous case.**
+`--model line` scales the residual from a *locally straight* path, and trailing
+overshoot — the mechanism this very file identifies as the one that **corrupts**
+decode — is a smooth, low-frequency excursion, so a local fit follows it, calls
+it intended, and never amplifies it. The sweep was structurally blind to the
+failure it was looking for, which is the likeliest reason every row is identical
+to the digit.
 
-Two ways to close it properly, cheapest first: **(a)** decompose against the
-polyline through the *target word's* key centres instead of a local line — the
-corpus already carries the target, and overshoot then registers as deviation and
-does get scaled; **(b)** capture real glides at 10:1.8 and 10:5.
+**`--model word` (now the default) fixes that** by decomposing against the
+polyline through the *target word's* key centres: overshoot lands past the end of
+that polyline, so it registers as deviation and does scale. Verified in
+`aspect_model_test.cpp` — at k=1.67 the word model amplifies a trailing overshoot
+**1.56×** and pushes more points out of bounds, where the line model leaves it at
+**1.00×**.
+
+**So the sweep above should be re-run** (`--sweep`, which now defaults to `word`).
+If it stays flat, the "no cliff" conclusion is real; if it does not, the resize
+band needs clamping after all.
+
+Remaining caveats either way: both models assume perfect re-aiming at the new key
+centres and unchanged speed, and the corpus is 18 glides from one writer. Real
+glides captured at 10:1.8 and 10:5 are what actually closes this.
 
 ## How to run on another session
 ```

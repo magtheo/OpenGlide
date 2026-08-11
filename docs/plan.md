@@ -105,14 +105,14 @@ settles the layout, resize, and visibility model. Ordered work:
    Still to do here: tray entry, a settings UI for §13.6, and the §13.3 question
    (the chord isn't suppressed, so the app underneath still sees left+right —
    live with it before building an interception layer).
-4. ~~**Aspect-ratio band**~~ ✅ (pre-check) — `corpus_test --sweep` run
-   2026-08-11: **no cliff**, top-1 flat at the 94% baseline from 10:5 to 10:1.8,
-   latency flat. **Resizing stays unclamped.** Caveat worth keeping in view: the
-   transform scales the residual from a locally-straight path, so *trailing
-   overshoot* — the one mechanism RESULTS.md shows corrupts decode — isn't
-   amplified by it, and the dangerous case is under-tested. Cheap way to close it
-   properly: decompose against the target word's key-centre polyline (the corpus
-   carries the target) rather than a local line.
+4. **Aspect-ratio band** — first sweep (2026-08-11) showed **no cliff**, top-1
+   flat at the 94% baseline from 10:5 to 10:1.8, so **resizing stays unclamped**.
+   But that run used the `line` model, which is structurally blind to trailing
+   overshoot — the one mechanism RESULTS.md shows corrupts decode — so a flat
+   result was close to guaranteed. The key-centre-polyline model is now built and
+   is the default (`--model word`); it amplifies overshoot 1.56× at k=1.67 where
+   the old one left it at 1.00×. **Re-run `--sweep`** to find out whether "no
+   cliff" survives a model that can actually see the failure.
 5. ~~**Recent-word history** (§9.3)~~ ✅ — and it cost no layout. The four chrome
    slots are contextual: right after a glide they show that word's candidates
    (as before), and once those go stale they become the **recent words**, each

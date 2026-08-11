@@ -49,17 +49,35 @@ How far it can drift before decode degrades is an open verification gate:
 ```
 `--sweep` re-projects each recorded glide onto blocks from 10:5 to 10:1.8 and
 prints top-1 per aspect; clamp the window's resize range to the rows that hold
-within noise of the 10:3 baseline.
+within noise of the 10:3 baseline. `--model word|line` picks how "intended path"
+is defined (see below); `word` is the default.
 
-**What the re-projection does and does not model.** Key centres are at fixed
-*normalized* positions and the user aims at keys, so the intended path is
-unchanged by a resize; what changes is what physical mouse momentum produces —
-wobble and overshoot — because normalizing by a shorter block magnifies it in y.
-So `reaspect()` splits y into a locally-straight component and a deviation, and
-scales only the deviation by `k = target_aspect / (10/3)`. It assumes the user
-re-aims perfectly and does not change speed, and its high-pass is crude. **It is
-a pre-check that narrows where to look, not the gate** — real glides captured at
-the edge aspects close that.
+**What the re-projection does and does not model** (`reaspect.h`). Key centres
+are at fixed *normalized* positions and the user aims at keys, so the intended
+path is unchanged by a resize; everything else in the stroke is physical, and
+normalizing by a shorter block magnifies it in y. Both models split y into
+"intended" + deviation and scale only the deviation by `k = target_aspect/(10/3)`.
+They differ in what counts as intended:
+
+- **`word` (default)** — the polyline through the *target word's* key centres.
+  Trailing overshoot lands past the end of that polyline, so it registers as
+  deviation and **does** get scaled. The projection walks the word in stroke
+  order: QWERTY paths cross themselves constantly, and a plain nearest-point
+  search matched the overshoot at the end of "stone" to the `s→t` segment at the
+  *start*, which made the overshoot come out smaller after a resize.
+- **`line`** — a locally-straight fit. Kept for comparison and used as a fallback
+  for words the layout can't map. Its blind spot is why `word` exists: trailing
+  overshoot is smooth, so a local fit follows it and calls it intended — and
+  RESULTS.md identifies trailing overshoot as *the* mechanism that corrupts
+  decode. The first sweep therefore could not see the failure it was looking for.
+
+`aspect_model_test.cpp` checks this directly (no model or dictionary needed):
+at k=1.67 the `word` model amplifies a trailing overshoot 1.56× and pushes more
+points off the board, while `line` leaves it at 1.00×.
+
+Both models still assume the user re-aims perfectly and does not change speed, so
+**this is a pre-check that narrows where to look, not the gate** — real glides
+captured at the edge aspects close that.
 
 ## Verified (2026-08-09)
 - spike: native `forward` == Python to **3.8e-6**; greedy `computer`. **PASS**

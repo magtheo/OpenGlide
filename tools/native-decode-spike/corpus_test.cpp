@@ -7,6 +7,7 @@
 // its limits. This is a PRE-CHECK, not the gate: it tells you where to look, and
 // a real capture at the candidate aspects confirms it.
 #include "swipe_engine.h"
+#include "reaspect.h"
 #include <cstdlib>
 #include <chrono>
 #include <cstdio>
@@ -16,57 +17,10 @@
 #include <string>
 #include <vector>
 
-// The aspect the existing corpora were captured at: a 10-column, 3-row block of
-// square keys.
-static constexpr float kCaptureAspect = 10.0f / 3.0f;
-
-// Re-project a recorded glide as if the SAME physical hand motion had been made
-// on a letter block of a different aspect ratio.
-//
-// Key centres sit at fixed NORMALIZED positions and the user aims at keys, so
-// the intended path through normalized space is unchanged by a resize. What does
-// change is everything produced by physical mouse momentum — wobble, curvature,
-// overshoot — because normalizing by a shorter block magnifies it in y. So split
-// y into a smoothed "intended" component and a deviation, and scale only the
-// deviation by k = target_aspect / capture_aspect.
-//
-// Limits, stated plainly: the local fit is a crude high-pass, and this assumes
-// the user re-aims perfectly at the new key centres (no re-learning cost, no
-// change in speed). It cannot replace capturing real glides at the new aspect —
-// it exists to narrow the range those captures need to cover.
-static void reaspect(std::vector<SwipePoint>& pts, float k, int win = 5) {
-    if (k == 1.0f || (int)pts.size() < 3) return;
-    const int n = (int)pts.size();
-    const int half = win / 2;
-    std::vector<float> sm(n);
-    for (int i = 0; i < n; i++) {
-        int lo = i - half, hi = i + half;
-        if (lo < 0) lo = 0;
-        if (hi > n - 1) hi = n - 1;
-        // Local least-squares LINE, evaluated at i — not a moving average. An
-        // average is biased at the ends of a sloped path, which would invent a
-        // deviation precisely where the decoder is most sensitive (RESULTS.md:
-        // trailing overshoot corrupts decode, leading overshoot does not). A
-        // local line reproduces a straight glide exactly, so a clean stroke is
-        // left alone at every aspect and only real wobble is scaled.
-        const int m = hi - lo + 1;
-        double sx = 0, sy = 0, sxx = 0, sxy = 0;
-        for (int j = lo; j <= hi; j++) {
-            const double x = j, y = pts[j].y;
-            sx += x; sy += y; sxx += x * x; sxy += x * y;
-        }
-        const double den = double(m) * sxx - sx * sx;
-        double a, b;
-        if (den == 0.0) { b = 0.0; a = sy / m; }
-        else { b = (double(m) * sxy - sx * sy) / den; a = (sy - b * sx) / m; }
-        sm[i] = float(a + b * double(i));
-    }
-    for (int i = 0; i < n; i++) pts[i].y = sm[i] + (pts[i].y - sm[i]) * k;
-}
-
 struct Result { int n = 0, top1 = 0, top5 = 0; double total_ms = 0; };
 
-static Result run(SwipeEngine& eng, const char* corpus, float aspect, bool verbose) {
+static Result run(SwipeEngine& eng, const char* corpus, float aspect, bool verbose,
+                  bool wordModel, const float centres[26][2]) {
     Result r;
     const float k = aspect / kCaptureAspect;
     std::ifstream f(corpus);
@@ -77,7 +31,8 @@ static Result run(SwipeEngine& eng, const char* corpus, float aspect, bool verbo
         if (!(ss >> target >> np) || np < 4) continue;
         std::vector<SwipePoint> pts(np);
         for (int i = 0; i < np; i++) { ss >> pts[i].x >> pts[i].y >> pts[i].t; }
-        reaspect(pts, k);
+        if (!wordModel || !reaspect_word(pts, target, centres, k))
+            reaspect(pts, k);      // fallback: local-line model
 
         auto t0 = std::chrono::steady_clock::now();
         std::string greedy;
@@ -109,7 +64,10 @@ int main(int argc, char** argv) {
             "  --aspect   re-project the corpus onto a letter block of this aspect\n"
             "             (default 10:3, the aspect it was captured at)\n"
             "  --sweep    run a band of aspects and print top-1 for each — the\n"
-            "             ADR-0005 pre-check for how far free resizing may go\n");
+            "             ADR-0005 pre-check for how far free resizing may go\n"
+            "  --model    word (default) decomposes against the target word's\n"
+            "             key-centre polyline, so overshoot scales with aspect;\n"
+            "             line uses a local straight fit, which does NOT scale it\n");
         return 2;
     }
 
@@ -121,10 +79,18 @@ int main(int argc, char** argv) {
     double lambda = -1.0;
     float aspect = kCaptureAspect;
     bool sweep = false;
+    bool wordModel = true;   // key-centre polyline; --model line for the old one
 
     int pos = 4;
     for (int i = 4; i < argc; i++) {
         if (!std::strcmp(argv[i], "--sweep")) { sweep = true; continue; }
+        if (!std::strcmp(argv[i], "--model") && i + 1 < argc) {
+            const char* m = argv[++i];
+            if (!std::strcmp(m, "line")) wordModel = false;
+            else if (!std::strcmp(m, "word")) wordModel = true;
+            else { std::fprintf(stderr, "--model must be word|line\n"); return 2; }
+            continue;
+        }
         if (!std::strcmp(argv[i], "--aspect") && i + 1 < argc) {
             const char* v = argv[++i];
             const char* colon = std::strchr(v, ':');
@@ -142,11 +108,19 @@ int main(int argc, char** argv) {
     if (lambda >= 0.0) eng.set_freq_lambda(lambda);
     if (!eng.ready()) { std::fprintf(stderr, "engine not ready\n"); return 1; }
 
+    // The geometry the decoder is actually scoring against — same source the UI
+    // draws from, so the simulated intent matches the real keyboard.
+    float centres[26][2];
+    for (const KeyCenter& kc : eng.layout()) {
+        const int idx = kc.label - 'a';
+        if (idx >= 0 && idx < 26) { centres[idx][0] = kc.x; centres[idx][1] = kc.y; }
+    }
+
     if (!sweep) {
         if (aspect != kCaptureAspect)
             std::printf("(re-projected to aspect %.2f — k=%.2f on y deviations)\n",
                         aspect, aspect / kCaptureAspect);
-        const Result r = run(eng, corpus, aspect, true);
+        const Result r = run(eng, corpus, aspect, true, wordModel, centres);
         if (r.n > 0)
             std::printf("\n=== native corpus: %d glides | top-1 %d (%.0f%%) | top-5 %d (%.0f%%) | avg decode %.1f ms ===\n",
                         r.n, r.top1, 100.0 * r.top1 / r.n, r.top5, 100.0 * r.top5 / r.n,
@@ -161,11 +135,13 @@ int main(int argc, char** argv) {
         {"10:3.0 (ref)",  3.333f},
         {"10:2.6", 3.85f}, {"10:2.2", 4.55f}, {"10:1.8 (wide)", 5.56f},
     };
+    std::printf("\nintent model: %s\n", wordModel ? "key-centre polyline (overshoot IS scaled)"
+                                                   : "local line (overshoot is NOT scaled)");
     std::printf("\n%-16s %8s %10s %10s %10s\n", "letter block", "k", "top-1", "top-5", "avg ms");
     std::printf("---------------------------------------------------------------\n");
     int baseline = -1;
     for (const auto& b : band) {
-        const Result r = run(eng, corpus, b.a, false);
+        const Result r = run(eng, corpus, b.a, false, wordModel, centres);
         if (r.n == 0) { std::fprintf(stderr, "empty corpus\n"); return 1; }
         if (b.a == 3.333f) baseline = r.top1;
         std::printf("%-16s %8.2f %6d %3.0f%% %6d %3.0f%% %10.1f\n",
