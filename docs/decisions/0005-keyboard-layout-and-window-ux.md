@@ -275,17 +275,19 @@ reported caret rectangle instead of covering the text being typed.
       implementation: 26 unique letters accepted (upper- or lowercase), 25 keys /
       duplicate letter / non-letter label all rejected, and the previously
       installed geometry survives every rejection.
-- [ ] **Aspect band measured, not assumed.** Capture a corpus at ≥3 letter-block
-      aspect ratios (e.g. 10:3, 10:4, 10:2.2) with the same prompts, and compare
-      dict top-1 against the 94% baseline of
-      `tools/futo-spike/corpus-controlled.jsonl` using
-      `tools/native-decode-spike/corpus_test.cpp`. Record the band where top-1
-      holds within noise, in RESULTS.md. The pre-check is now one command —
-      `corpus_test … --sweep` re-projects the existing corpus onto blocks from
-      10:5 to 10:1.8 and prints top-1 per aspect — but **it still needs running**
-      (it wants the model + an ExecuTorch build). It assumes the user re-aims
-      perfectly and does not change speed, so it narrows the range the real
-      captures must cover; it does not close this gate on its own.
+- [~] **Aspect band measured, not assumed.** **Pre-check run 2026-08-11: no
+      cliff** — `corpus_test --sweep` held top-1 at the 94% corpus baseline across
+      the whole band, 10:5 (tall) to 10:1.8 (wide), latency flat (RESULTS.md).
+      **Decision: resizing stays unclamped** (§3). The gate stays open rather than
+      closed, because the transform under-tests the dangerous case: it scales the
+      residual from a *locally straight* path, and trailing overshoot — the
+      mechanism RESULTS.md identifies as decode-corrupting — is a smooth
+      excursion, so a local line fit treats it as intended and never amplifies it.
+      A flat result there is weak evidence about the one failure mode that
+      matters. Close it either by decomposing against the **target word's
+      key-centre polyline** instead of a local line (the corpus already carries
+      the target, and overshoot then registers as deviation), or by capturing real
+      glides at the edge aspects.
 - [ ] **Zero-diff model inputs.** After the wings/action-row change, assert the
       26 normalized letter centers are byte-identical to F3, and re-run
       `corpus_test` for an unchanged 17/18.

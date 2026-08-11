@@ -168,6 +168,47 @@ Mechanism findings:
 ## Personalization — learn the user's words ✅
 `swipe_engine` keeps per-user word counts at `~/.local/share/openglide/user_freq.tsv` (loaded at startup). `decode` snapshots them under a mutex (`bump` runs on the UI thread) and adds `user_lambda·log(count+1)` (λ=2.0) before ranking — so words the user actually uses win ties over time. This is the right "learn common words": it learns the USER's vocabulary, sidestepping the help>hello problem that killed the generic frequency prior (the user teaches it "hello" by using/correcting it). Bumped on every glide commit + candidate correction (`decoder.bumpWord`); `bump()` saves immediately because SIGTERM/crash skips the dtor (so shutdown-only save would lose everything). Verified: persistence test (bump hello×2/world/good → file has `hello 2, world 1, good 1`); corpus still 94% (empty user_freq → no-op).
 
+## Letter-block aspect ratio — free resize is safe across the tested band ✅
+ADR-0005 made `u` (column) and `rowH` (row) independent so the window fills any
+shape, which unpinned the letter block from the 10:3 it was captured at. Run:
+`corpus_test … --sweep` (re-projects `corpus-controlled.jsonl`, 18 glides).
+
+**Result (2026-08-11): no cliff.** Top-1 was flat at **17/18 (94%)** — the corpus
+baseline — at every aspect from 10:5 (tall) to 10:1.8 (wide), i.e. k = 0.60 →
+1.67. Top-5 identical, latency flat at ~76 ms.
+
+| letter block | k | top-1 | top-5 | avg ms |
+|---|---|---|---|---|
+| 10:5.0 (tall) | 0.60 | 17 (94%) | 17 (94%) | 76.7 |
+| 10:4.0 | 0.75 | 17 (94%) | 17 (94%) | 75.4 |
+| 10:3.5 | 0.86 | 17 (94%) | 17 (94%) | 75.4 |
+| **10:3.0 (ref)** | 1.00 | **17 (94%)** | 17 (94%) | 75.7 |
+| 10:2.6 | 1.15 | 17 (94%) | 17 (94%) | 77.4 |
+| 10:2.2 | 1.37 | 17 (94%) | 17 (94%) | 76.3 |
+| 10:1.8 (wide) | 1.67 | 17 (94%) | 17 (94%) | 76.3 |
+
+The single miss is the same word at every aspect — the known too-short stroke, a
+dictionary/stroke issue, not a shape one.
+
+**Decision: resizing stays unclamped** (ADR-0005 §3). Nothing here justifies
+restricting it.
+
+**What this does and does not establish.** The identical result at every aspect
+is partly a property of the simulator, so read it as "this model finds no
+problem", not "proven safe for real hands":
+- `reaspect()` scales the residual from a **locally straight** path. Trailing
+  overshoot — the mechanism this file already identifies as the one that
+  *corrupts* decode — is a smooth, low-frequency excursion, so a local line fit
+  treats it as intended and does **not** amplify it. The dangerous case is
+  therefore under-tested by exactly this transform.
+- It assumes perfect re-aiming at the new key centres and unchanged speed.
+- 18 glides, one writer.
+
+Two ways to close it properly, cheapest first: **(a)** decompose against the
+polyline through the *target word's* key centres instead of a local line — the
+corpus already carries the target, and overshoot then registers as deviation and
+does get scaled; **(b)** capture real glides at 10:1.8 and 10:5.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make

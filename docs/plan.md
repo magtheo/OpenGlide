@@ -105,13 +105,14 @@ settles the layout, resize, and visibility model. Ordered work:
    Still to do here: tray entry, a settings UI for §13.6, and the §13.3 question
    (the chord isn't suppressed, so the app underneath still sees left+right —
    live with it before building an interception layer).
-4. **Aspect-ratio band** — the pre-check is built: `corpus_test --sweep`
-   re-projects the corpus onto blocks from 10:5 to 10:1.8 and prints top-1 per
-   aspect (`reaspect()` scales only the momentum-driven deviation, since key
-   centres are at fixed normalized positions). **Someone has to run it** — it
-   needs the model + ExecuTorch build. Then clamp the window's resize range to
-   the rows that hold, and confirm with real glides captured at the edge
-   aspects. The live aspect is shown in the diagnostics overlay.
+4. ~~**Aspect-ratio band**~~ ✅ (pre-check) — `corpus_test --sweep` run
+   2026-08-11: **no cliff**, top-1 flat at the 94% baseline from 10:5 to 10:1.8,
+   latency flat. **Resizing stays unclamped.** Caveat worth keeping in view: the
+   transform scales the residual from a locally-straight path, so *trailing
+   overshoot* — the one mechanism RESULTS.md shows corrupts decode — isn't
+   amplified by it, and the dangerous case is under-tested. Cheap way to close it
+   properly: decompose against the target word's key-centre polyline (the corpus
+   carries the target) rather than a local line.
 5. ~~**Recent-word history** (§9.3)~~ ✅ — and it cost no layout. The four chrome
    slots are contextual: right after a glide they show that word's candidates
    (as before), and once those go stale they become the **recent words**, each

@@ -62,6 +62,23 @@ target app (spec §17) — confirmed on XWayland.
 - **Key geometry is loaded, not hard-coded** (spec §7.2): `languages/en/layout.json`
   → `SwipeEngine::set_layout()` → read back → `decoder.keys` → QML. One file, both
   consumers. A malformed layout is rejected whole and the built-in QWERTY stands.
+- **Key routing is switchable** (`OPENGLIDE_KEY_ROUTING`): `auto` (default) passes
+  Super combos to the compositor and forwards everything else; `pass` returns
+  FALSE for **everything** — the experiment; `forward` is the old
+  forward-everything control. `forward` breaks any globally grabbed shortcut
+  (Super+N, Alt+Tab, Ctrl+Alt+arrows) because `forward_key_event` re-injects a
+  *synthetic* event the compositor never sees. If `pass` turns out to deliver
+  ordinary typing correctly, it should become the default and the forward path
+  can be deleted — fixing every shortcut at once instead of one modifier at a
+  time. Check in order: (1) typing into a focused field, (2) Super+1, (3) Alt+Tab.
+- **Content logging** is `OPENGLIDE_LOG_CONTENT=1` (alias: `OPENGLIDE_KEY_DEBUG`).
+  It prints every key you press to stderr and announces itself loudly — it is a
+  keystroke log, so it is per-session, never persisted, never on by default
+  (ADR-0004 amendment).
+- **⌫**: tap = delete the last **word** (undoable — an "↶ word" chip appears in
+  the chrome for 8 s and restores the word *and* its alternatives); hold = one
+  char immediately, then repeat every 70 ms; hold+swipe-left = multi-word delete
+  with the dot gauge; swipe-right = undo within that gesture.
 - **Recent-word history (spec §9.3)**: the four chrome slots are contextual —
   candidates right after a glide, the recent words once those go stale. Each
   history word keeps the candidate list its own glide produced, so clicking it

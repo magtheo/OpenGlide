@@ -86,6 +86,8 @@ Window {
     property int    histOpen: -1     // index into history whose popup is open
     property real   histOpenX: 0
     readonly property int histMax: 12
+    property string pendingUndo: ""      // word removed by a ⌫ tap, restorable
+    property var    pendingUndoEntry: null
 
     // What the chrome slots show. Right after a glide those slots ARE the
     // alternatives for the word just committed, so candidates take priority;
@@ -96,13 +98,16 @@ Window {
     readonly property bool showingHistory: candidates.length === 0 && history.length > 0
     readonly property var chromeSlots: {
         var a = [];
+        if (pendingUndo.length)      // an undo offer outranks both
+            a.push({text: "↶ " + pendingUndo.replace(/\s+$/, ""), hist: false, undo: true, idx: -1});
+        const room = 4 - a.length;
         if (candidates.length > 0) {
-            for (var i = 0; i < Math.min(4, candidates.length); i++)
-                a.push({text: candidates[i].text, hist: false, idx: i});
+            for (var i = 0; i < Math.min(room, candidates.length); i++)
+                a.push({text: candidates[i].text, hist: false, undo: false, idx: i});
             return a;
         }
-        for (var j = Math.max(0, history.length - 4); j < history.length; j++)
-            a.push({text: history[j].text, hist: true, idx: j});
+        for (var j = Math.max(0, history.length - room); j < history.length; j++)
+            a.push({text: history[j].text, hist: true, undo: false, idx: j});
         return a;
     }
     property bool   decoderDead: false
@@ -163,6 +168,7 @@ Window {
 
     // ================= injection ops (keep `injected` in sync with the target) ==
     function commitDecoded(word) {
+        clearUndo();
         const w = shiftState > 0 ? word.charAt(0).toUpperCase() + word.substring(1) : word;
         const start = injected.length;
         injector.commit(w);
@@ -231,14 +237,16 @@ Window {
         candidates = [];
     }
     function typeKey(c) {
+        clearUndo();
         const ch = shifted(c);
         injector.typeChar(ch);
         injected += ch;
         consumeShift();
     }
-    function tapSpace() { injector.typeChar(" "); injected += " "; }
+    function tapSpace() { clearUndo(); injector.typeChar(" "); injected += " "; }
     function tapEnter() { injector.typeChar("\n"); injected += "\n"; }
     function tapPunct(p) {                       // collapse a preceding space, then "p "
+        clearUndo();
         if (injected.length && injected[injected.length - 1] === " ") {
             injector.backspace(1);
             injected = injected.substring(0, injected.length - 1);
@@ -249,6 +257,7 @@ Window {
     }
     function deleteChar() {
         if (!injected.length) return;
+        clearUndo();
         candidates = [];                  // editing invalidates the last glide's suggestions
         injector.backspace(1);
         injected = injected.substring(0, injected.length - 1);
@@ -256,6 +265,7 @@ Window {
     }
     function deleteWord() {                      // backspace-swipe: trailing spaces + one word
         if (!injected.length) return "";
+        clearUndo();          // tapDeleteWord re-stages after this returns
         candidates = [];
         var i = injected.length, n = 0;
         while (i > 0 && injected[i - 1] === " ") { i--; n++; }
@@ -271,6 +281,32 @@ Window {
         injector.commitExact(s);
         injected += s;
     }
+    // Tapping ⌫ removes a whole word, so a mis-tap costs a word rather than a
+    // character — and the swipe-right undo only covers the swipe gesture. Stage
+    // the deletion (with its history entry, so the alternatives come back too)
+    // and offer it as a chip until it times out.
+    function tapDeleteWord() {
+        const hBefore = history;
+        const s = deleteWord();
+        if (!s.length) return;
+        pendingUndoEntry = hBefore.length > history.length ? hBefore[hBefore.length - 1] : null;
+        pendingUndo = s;
+        undoTimer.restart();
+    }
+    function undoDelete() {
+        if (!pendingUndo.length) return;
+        const start = injected.length;          // deleteWord() returns "word" + spaces
+        injector.commitExact(pendingUndo);
+        injected += pendingUndo;
+        if (pendingUndoEntry)
+            pushHistory(pendingUndoEntry.text, pendingUndoEntry.cands, start);
+        clearUndo();
+    }
+    function clearUndo() {
+        pendingUndo = ""; pendingUndoEntry = null;
+        undoTimer.stop();
+    }
+    Timer { id: undoTimer; interval: 8000; onTriggered: win.clearUndo() }
     // Candidate click. The newest word is just the last history entry, so this is
     // the same operation the history popup performs — one code path, not two.
     function correct(i) {
@@ -444,28 +480,33 @@ Window {
                 Rectangle {
                     readonly property var slot: index < win.chromeSlots.length ? win.chromeSlots[index] : null
                     readonly property bool isHist: slot ? slot.hist : false
-                    readonly property bool isTop: slot && !slot.hist && index === 0
+                    readonly property bool isUndo: slot ? slot.undo === true : false
+                    readonly property bool isTop: slot && !slot.hist && !slot.undo && slot.idx === 0
                     x: win.u * (0.36 + index * 1.63); y: parent.height * 0.14
                     width: win.u * 1.57; height: parent.height * 0.72
                     radius: height / 2
                     visible: slot !== null
-                    color: isTop ? pal.accent : (isHist ? "transparent" : "#ffffff")
-                    border.color: isHist ? pal.muted : "#dadce0"
-                    border.width: isTop ? 0 : 1
+                    color: isTop ? pal.accent : (isHist || isUndo ? "transparent" : "#ffffff")
+                    border.color: isUndo ? pal.accent : (isHist ? pal.muted : "#dadce0")
+                    border.width: isTop ? 0 : (isUndo ? 2 : 1)
                     Text {
                         anchors.fill: parent; anchors.margins: parent.height * 0.18
                         text: parent.slot ? parent.slot.text : ""
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                         elide: Text.ElideRight
-                        font.bold: parent.isTop
+                        font.bold: parent.isTop || parent.isUndo
                         font.pixelSize: Math.max(8, win.u * 0.26)
-                        color: parent.isTop ? pal.accentText : (parent.isHist ? pal.muted : pal.keyText)
+                        color: parent.isTop ? pal.accentText
+                               : parent.isUndo ? pal.accent
+                               : (parent.isHist ? pal.muted : pal.keyText)
                     }
                     MouseArea {
                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             if (!parent.slot) return;
-                            if (parent.slot.hist) {
+                            if (parent.slot.undo) {
+                                win.undoDelete();
+                            } else if (parent.slot.hist) {
                                 win.histOpenX = parent.x;
                                 win.histOpen = win.histOpen === parent.slot.idx ? -1 : parent.slot.idx;
                             } else {
@@ -657,7 +698,13 @@ Window {
                     anchors.centerIn: parent; text: "⌫"
                     font.pixelSize: Math.max(10, Math.min(win.u, win.rowH) * 0.50); color: pal.actionText
                 }
-                // tap = word · hold = repeat (char) · hold+swipe-left = word delete · right = undo
+                // tap = word · hold = one char immediately, then repeat
+                //   · hold+swipe-left = multi-word delete · swipe-right = undo
+                // The hold deletes its first char the moment the threshold trips,
+                // not one repeat-interval later. Otherwise "delete exactly one
+                // character" was a 70 ms window after a 490 ms wait — unusable,
+                // and single chars are exactly what tap-to-type and the symbols
+                // layer produce. Now you hold, see one char go, and release.
                 MouseArea {
                     id: bs
                     anchors.fill: parent
@@ -690,10 +737,13 @@ Window {
                     }
                     onReleased: {
                         holdDelay.stop(); charRepeat.stop();
-                        if (!acted) win.deleteWord();
+                        if (!acted) win.tapDeleteWord();
                     }
                 }
-                Timer { id: holdDelay;  interval: 420; onTriggered: if (!bs.swiping) charRepeat.start() }
+                Timer {
+                    id: holdDelay; interval: 420
+                    onTriggered: if (!bs.swiping) { win.deleteChar(); bs.acted = true; charRepeat.start() }
+                }
                 Timer { id: charRepeat; interval: 70; repeat: true; onTriggered: { win.deleteChar(); bs.acted = true } }
             }
         }

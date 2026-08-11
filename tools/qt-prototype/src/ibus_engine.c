@@ -62,23 +62,82 @@ static void og_disable(IBusEngine *engine) {
     g_atomic_pointer_set(&g_engine, NULL);
     fprintf(stderr, "[openglide-ibus] disabled\n");
 }
-/* Pass-through: forward physical key events so normal typing keeps working while
- * OpenGlide is the active IME. But never CLAIM a Super (Mod4) combo:
- * ibus_engine_forward_key_event re-injects the key as a SYNTHETIC event into the
- * focused input context, which types its glyph and starves GNOME's compositor
- * shortcut of the real key (Super+1 should open dock slot 1; instead it typed
- * "1"). Returning FALSE lets IBus deliver Super combos via the normal path, so
- * the compositor sees them. Plain keys still forward as before. */
+/* ---- key routing policy -------------------------------------------------
+ *
+ * The engine must not swallow physical keys while it is the active IME. Two
+ * ways to achieve that, and which one is correct is an OPEN QUESTION:
+ *
+ *   forward  — ibus_engine_forward_key_event + return TRUE. Re-injects the key
+ *              as a SYNTHETIC event into the focused input context. Typing works,
+ *              but the compositor never sees the real key, so any globally
+ *              grabbed shortcut dies: Super+1 typed "1" instead of opening dock
+ *              slot 1. Alt+Tab, Ctrl+Alt+arrows, Print Screen are the same class.
+ *   pass     — return FALSE. "Not mine" — IBus delivers it down the normal path,
+ *              so the compositor and the client both see the real event.
+ *
+ * `auto` (default) is the empirical compromise we know works: pass Super combos,
+ * forward everything else. But if `pass` turns out to deliver ordinary keys too,
+ * the whole synthetic-forward path can go away and every compositor shortcut is
+ * fixed at once — rather than one modifier at a time. RESULTS.md recorded that
+ * forwarding was *required* for normal typing, but the Super fix is evidence
+ * that FALSE does reach its destination, so that finding deserves a re-test.
+ *
+ *   OPENGLIDE_KEY_ROUTING=pass      -> return FALSE for everything (THE EXPERIMENT)
+ *   OPENGLIDE_KEY_ROUTING=forward   -> old behaviour, forward everything (control)
+ *   OPENGLIDE_KEY_ROUTING=auto      -> default: pass Super, forward the rest
+ *
+ * Run with `pass` and check, in order: (1) can you still type normally into a
+ * focused field, (2) does Super+1 work, (3) does Alt+Tab work. If all three hold,
+ * make `pass` the default and delete the forward path. */
+enum { OG_ROUTE_AUTO = 0, OG_ROUTE_PASS, OG_ROUTE_FORWARD };
+static int g_key_routing = -1;      /* resolved once, on first key */
+static int g_log_content = -1;      /* content logging opt-in (ADR-0004) */
+
+/* ADR-0004: key names ARE user content — this is a keystroke log. It must stay
+ * behind a deliberate, announced, non-persistent opt-in, so it is resolved once
+ * and shouts when it is on. Writes to stderr rather than a file: visible to the
+ * user, and gone when the session ends. */
+static gboolean og_content_logging(void) {
+    if (g_log_content < 0) {
+        const char *v = getenv("OPENGLIDE_LOG_CONTENT");
+        if (!v) v = getenv("OPENGLIDE_KEY_DEBUG");   /* accepted alias */
+        g_log_content = (v && *v && strcmp(v, "0") != 0) ? 1 : 0;
+        if (g_log_content)
+            fprintf(stderr,
+                "\n*** OPENGLIDE CONTENT LOGGING IS ON ***\n"
+                "    Every key you press will be printed to stderr, including\n"
+                "    passwords. This session only. Unset OPENGLIDE_LOG_CONTENT\n"
+                "    (or OPENGLIDE_KEY_DEBUG) and restart to turn it off.\n\n");
+    }
+    return g_log_content == 1;
+}
+
+static int og_key_routing(void) {
+    if (g_key_routing < 0) {
+        const char *v = getenv("OPENGLIDE_KEY_ROUTING");
+        if (v && strcmp(v, "pass") == 0)         g_key_routing = OG_ROUTE_PASS;
+        else if (v && strcmp(v, "forward") == 0) g_key_routing = OG_ROUTE_FORWARD;
+        else                                     g_key_routing = OG_ROUTE_AUTO;
+        if (g_key_routing != OG_ROUTE_AUTO)
+            fprintf(stderr, "[openglide-ibus] key routing = %s (non-default)\n", v);
+    }
+    return g_key_routing;
+}
+
 static gboolean og_process_key_event(IBusEngine *engine, guint keyval, guint keycode, guint state) {
+    const int route = og_key_routing();
     const gboolean super = (state & IBUS_MOD4_MASK) ||
         keyval == IBUS_KEY_Super_L || keyval == IBUS_KEY_Super_R;
-    if (getenv("OPENGLIDE_KEY_DEBUG")) {        /* per-key routing trace */
+    /* pass = never claim; forward = always claim; auto = pass only Super combos */
+    const gboolean pass = (route == OG_ROUTE_PASS) ||
+                          (route == OG_ROUTE_AUTO && super);
+    if (og_content_logging()) {
         const char *n = ibus_keyval_name(keyval);
         fprintf(stderr, "[key] %s state=0x%X -> %s\n", n ? n : "?", state,
-                super ? "passthrough (Super)" : "forward");
+                pass ? "pass (compositor/client)" : "forward (synthetic)");
     }
-    if (super)
-        return FALSE;                          /* Super combo: let the compositor have it */
+    if (pass)
+        return FALSE;                          /* let it continue down the normal path */
     ibus_engine_forward_key_event(engine, keyval, keycode, state);
     return TRUE;
 }
