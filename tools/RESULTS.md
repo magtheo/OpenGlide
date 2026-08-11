@@ -278,6 +278,29 @@ immediate glide-then-correct case, imprecise otherwise. Durable fix is a preedit
 model (current word stays uncommitted, so correcting it needs no deletion) —
 deferred; see ADR-0006 consequences.
 
+**Two consequences of the uinput-only backspace, fixed 2026-08-11:**
+- It needs ~17 ms of real sleeps per character (the compositor drops keystrokes
+  without them), and it ran on the **Qt UI thread**. Fine while correction only
+  touched the last word; recent-word correction (spec §9.3) deletes the word *and
+  retypes everything after it*, so correcting an early history entry is 70+
+  characters — **over a second of frozen keyboard**.
+- uinput writes land immediately while an IBus commit is queued onto the GLib
+  thread, so **"commit then backspace" could invert**: glide a word, tap ⌫ at
+  once, and the delete reaches the field before the word does.
+
+Both are the same root cause — output had no single owner (ADR-0003). All four
+ops (commit / commitExact / typeChar / backspace) now queue onto **one serialized
+worker thread** in submission order; the UI thread only enqueues. The worker uses
+a new `og_ibus_commit_sync` that waits for the GLib dispatch — fire-and-forget was
+the right fix at the wrong layer, and a dedicated output thread can afford to
+block, which is what buys back ordering against uinput.
+
+**Preedit support is now probed** (`set_capabilities` → `IBUS_CAP_PREEDIT_TEXT`).
+No behaviour change: the diagnostics overlay reports `preedit: YES/no (caps 0x…)`
+per focused client, plus the output-queue depth. Whether a preedit text model is
+worth building depends on what real apps declare — check a GTK field, a terminal
+and an Electron app before deciding.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make

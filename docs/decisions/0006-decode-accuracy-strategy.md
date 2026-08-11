@@ -125,7 +125,14 @@ re-ranking is useless without decode depth:
   regressions) is what guards it.
 - This does **not** address committed-text deletion (separate problem —
   `delete_surrounding_text` faults gnome-shell; see RESULTS.md). Accuracy and
-  deletion are independent tracks.
+  deletion are independent *workstreams* — but not independent *priorities*:
+  spec §36 says a 94% decoder with one-click correction beats a nominally better
+  one with poor correction, and correction currently rests on a primitive that is
+  imprecise by its own comment. Preedit would make correcting the current word
+  exact and deletion-free, which lowers the accuracy bar this ADR is trying to
+  raise. **`IBUS_CAP_PREEDIT_TEXT` is now probed and shown in diagnostics** — if
+  real apps report it, preedit deserves to be weighed against both levers here
+  rather than deferred behind them.
 
 ## Verification gates
 

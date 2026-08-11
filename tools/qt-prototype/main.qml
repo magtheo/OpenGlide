@@ -164,6 +164,24 @@ Window {
     // glide or a drag, and it stays inside the screen. Many toolkits never report
     // at all — then caretReports() stays 0 and this does nothing, which is why it
     // is safe to leave on.
+    // Preedit probe (no behaviour change yet). Deletion is broken on GNOME — the
+    // IBus delete API aborts the shell, forwarded BackSpace is ignored, and uinput
+    // targets the focused surface rather than the commit context — so every
+    // correction path rests on a shaky primitive. Preedit is the way out: leave the
+    // current word UNCOMMITTED and editing it needs no deletion at all. But that
+    // only works in clients that can display preedit, and terminals/Electron often
+    // cannot. So: report what the focused app declares, and decide from data.
+    property bool preeditSupported: false
+    property int  clientCaps: -1
+    Timer {
+        interval: 700; repeat: true
+        running: win.visible && !win.collapsed
+        onTriggered: {
+            win.preeditSupported = injector.preeditSupported();
+            win.clientCaps = injector.capabilities();
+        }
+    }
+
     property bool avoidCaret: true
     property rect caretRect: Qt.rect(0, 0, 0, 0)
     property int  caretReports: 0
@@ -885,6 +903,9 @@ Window {
                 text: win.stateText() + "   ·   aspect " + win.letterAspect.toFixed(2)
                       + "   ·   " + decoder.layoutId
                       + "   ·   toggle: " + toggleListener.status
+                      + "   ·   preedit: " + (win.clientCaps < 0 ? "no caps reported"
+                            : (win.preeditSupported ? "YES" : "no") + " (caps 0x" + win.clientCaps.toString(16) + ")")
+                      + "   ·   out queue: " + injector.pending()
                       + "   ·   caret: " + (win.caretReports > 0
                             ? win.caretRect.x + "," + win.caretRect.y + " ×" + win.caretReports
                             : "never reported")

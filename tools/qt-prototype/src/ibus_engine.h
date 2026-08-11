@@ -29,6 +29,21 @@ bool og_ibus_active(void);
  * block the caller. Returns false only if OpenGlide isn't active. */
 bool og_ibus_commit(const char *utf8);
 
+/* Commit and WAIT until it has actually been applied. Only for callers on a
+ * dedicated output thread — it blocks. Returns false if OpenGlide isn't active or
+ * the wait timed out. Exists so uinput keystrokes (immediate) and IBus commits
+ * (queued) stay in submission order; see the comment on the definition. */
+bool og_ibus_commit_sync(const char *utf8, int timeout_ms);
+
+/* Raw capability bitmask last declared by the focused client, or -1 if none ever
+ * did. IBUS_CAP_PREEDIT_TEXT is the interesting bit. */
+int og_ibus_capabilities(void);
+
+/* The focused client can display preedit text — i.e. the current word could stay
+ * uncommitted and be edited without deleting anything. False also when no client
+ * has reported capabilities at all. */
+bool og_ibus_preedit_supported(void);
+
 /* Where the focused application says its text cursor is, in screen pixels.
  *
  * Clients report this through the IBus `set_cursor_location` vfunc so an IME can

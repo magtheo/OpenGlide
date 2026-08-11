@@ -140,6 +140,28 @@ static gboolean og_process_key_event(IBusEngine *engine, guint keyval, guint key
     ibus_engine_forward_key_event(engine, keyval, keycode, state);
     return TRUE;
 }
+/* ---- client capabilities -------------------------------------------------
+ * The focused client declares what it can render. IBUS_CAP_PREEDIT_TEXT is the
+ * one that matters here: preedit (keeping the current word UNCOMMITTED so editing
+ * it needs no deletion) is only viable in clients that can display it, and
+ * terminals and some Electron apps cannot. Deletion is currently broken on GNOME
+ * — delete_surrounding_text aborts the shell, forwarded BackSpace is ignored, and
+ * uinput targets the wrong context — so preedit is the obvious way out, but only
+ * where this bit is set. Probe before building on it. */
+static volatile gint g_caps = -1;   /* -1 = never reported */
+
+static void og_set_capabilities(IBusEngine *engine, guint caps) {
+    (void)engine;
+    g_atomic_int_set(&g_caps, (gint)caps);
+}
+
+int og_ibus_capabilities(void) { return (int)g_atomic_int_get(&g_caps); }
+
+bool og_ibus_preedit_supported(void) {
+    const gint c = g_atomic_int_get(&g_caps);
+    return c >= 0 && (((guint)c) & IBUS_CAP_PREEDIT_TEXT) != 0;
+}
+
 /* ---- caret location (spec: keep the keyboard off the text) ----------------
  * set_cursor_location arrives on the GLib thread; QML reads it on the Qt thread,
  * so the rect is published under a mutex. Guarded by a report counter so callers
@@ -184,6 +206,7 @@ static void og_engine_class_init(OgEngineClass *klass) {
     IBUS_ENGINE_CLASS(klass)->disable           = og_disable;
     IBUS_ENGINE_CLASS(klass)->process_key_event = og_process_key_event;
     IBUS_ENGINE_CLASS(klass)->set_cursor_location = og_set_cursor_location;
+    IBUS_ENGINE_CLASS(klass)->set_capabilities    = og_set_capabilities;
 }
 
 static gpointer ibus_thread(gpointer arg) {
@@ -248,7 +271,11 @@ bool og_ibus_active(void)    { return g_atomic_pointer_get(&g_engine) != NULL; }
  * wait-loop pile up across glide commits and freeze the session. Ordering holds
  * (GLib dispatches invoke sources FIFO), and the injector skips its uinput
  * fallback whenever the engine is active, so a queued commit can't double-fire. */
-struct commit_job { char *text; };
+/* `done` is NULL for fire-and-forget callers; a sync caller points it at its own
+ * flag and waits. Ordering matters: uinput backspace lands immediately while an
+ * IBus commit is queued, so "commit then backspace" can invert unless the commit
+ * is confirmed first. See og_ibus_commit_sync. */
+struct commit_job { char *text; volatile int *done; };
 static gboolean commit_idle(gpointer p) {
     struct commit_job *j = (struct commit_job *)p;
     /* Re-read g_engine HERE (GLib thread): enable/disable also run on this thread,
@@ -261,7 +288,8 @@ static gboolean commit_idle(gpointer p) {
         ibus_engine_commit_text(e, t);
         g_object_unref(t);
     }
-    free(j->text);   /* fire-and-forget: the idle owns + frees the job */
+    free(j->text);   /* the idle owns + frees the job */
+    if (j->done) *j->done = 1;   /* publish AFTER the commit actually ran */
     free(j);
     return G_SOURCE_REMOVE;
 }
@@ -270,11 +298,35 @@ bool og_ibus_commit(const char *utf8) {
     struct commit_job *j = malloc(sizeof *j);
     if (!j) return false;
     j->text = strdup(utf8);
+    j->done = NULL;
     if (g_ibus_thread_id && g_thread_self() == g_ibus_thread_id)
         commit_idle(j);                                  /* already on the GLib thread */
     else
         g_main_context_invoke(g_ctx, commit_idle, j);   /* async: queued, dispatched in order */
     return true;   /* queued — never blocks the caller */
+}
+
+/* Same commit, but waits until it has actually run.
+ *
+ * ONLY for callers on a dedicated output thread. Blocking was made
+ * fire-and-forget because it froze the Qt/UI thread under rapid backspace repeat —
+ * that was the right fix at the wrong layer. Once every output op runs on one
+ * serialized worker, blocking there costs nothing and buys back ordering against
+ * uinput, which writes immediately and would otherwise overtake a queued commit
+ * (glide a word, tap backspace instantly, and the delete could land before the
+ * word appeared). Never call this from the UI thread. */
+bool og_ibus_commit_sync(const char *utf8, int timeout_ms) {
+    if (!g_ctx || !g_atomic_pointer_get(&g_engine)) return false;
+    if (g_ibus_thread_id && g_thread_self() == g_ibus_thread_id)
+        return og_ibus_commit(utf8);          /* inline: already ordered */
+    struct commit_job *j = malloc(sizeof *j);
+    if (!j) return false;
+    volatile int done = 0;
+    j->text = strdup(utf8);
+    j->done = &done;
+    g_main_context_invoke(g_ctx, commit_idle, j);
+    for (int i = 0; i < timeout_ms && !done; i++) g_usleep(1000);
+    return done != 0;   /* false = timed out; the job still frees itself */
 }
 
 /* Restore the user's previous engine (shutdown). Marshaled to the GLib thread. */

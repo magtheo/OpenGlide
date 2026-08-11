@@ -62,15 +62,13 @@ target app (spec §17) — confirmed on XWayland.
 - **Key geometry is loaded, not hard-coded** (spec §7.2): `languages/en/layout.json`
   → `SwipeEngine::set_layout()` → read back → `decoder.keys` → QML. One file, both
   consumers. A malformed layout is rejected whole and the built-in QWERTY stands.
-- **Key routing is switchable** (`OPENGLIDE_KEY_ROUTING`): `auto` (default) passes
-  Super combos to the compositor and forwards everything else; `pass` returns
-  FALSE for **everything** — the experiment; `forward` is the old
-  forward-everything control. `forward` breaks any globally grabbed shortcut
-  (Super+N, Alt+Tab, Ctrl+Alt+arrows) because `forward_key_event` re-injects a
-  *synthetic* event the compositor never sees. If `pass` turns out to deliver
-  ordinary typing correctly, it should become the default and the forward path
-  can be deleted — fixing every shortcut at once instead of one modifier at a
-  time. Check in order: (1) typing into a focused field, (2) Super+1, (3) Alt+Tab.
+- **Key routing** (`OPENGLIDE_KEY_ROUTING`): `pass` is the **default**, verified on
+  hardware — the engine returns FALSE for every key, so IBus delivers it down the
+  normal path and both the compositor and the client see the real event. Typing,
+  Super+1 and Alt+Tab all work. `forward` (the old behaviour) re-injects a
+  *synthetic* event the compositor never sees, which broke every globally grabbed
+  shortcut; `auto` (pass Super only) was the interim compromise. Both remain as
+  fallbacks.
 - **Content logging** is `OPENGLIDE_LOG_CONTENT=1` (alias: `OPENGLIDE_KEY_DEBUG`).
   It prints every key you press to stderr and announces itself loudly — it is a
   keystroke log, so it is per-session, never persisted, never on by default
@@ -79,6 +77,20 @@ target app (spec §17) — confirmed on XWayland.
   the chrome for 8 s and restores the word *and* its alternatives); hold = one
   char immediately, then repeat every 70 ms; hold+swipe-left = multi-word delete
   with the dot gauge; swipe-right = undo within that gesture.
+- **Output is serialized** (`src/injector.{h,cpp}`): commit / commitExact /
+  typeChar / backspace all queue onto ONE worker thread in submission order; the
+  UI thread only enqueues. Two bugs in one fix — uinput backspace needs ~17 ms of
+  real sleeps per character and used to run on the UI thread (recent-word
+  correction can delete 70+ chars = a second of freeze), and uinput writes land
+  immediately while IBus commits are queued, so "commit then backspace" could
+  invert. The worker uses `og_ibus_commit_sync`, which blocks — harmless off the
+  UI thread, and it is what restores ordering. `injector.pending()` exposes the
+  queue depth (shown in diagnostics).
+- **Preedit probe**: `set_capabilities` records what the focused client declares;
+  diagnostics shows `preedit: YES/no (caps 0x…)`. No behaviour change yet — it
+  answers whether a preedit model (current word left uncommitted, so correcting it
+  needs no deletion) is viable in the apps you actually use, before anything is
+  built on it. Deletion is the broken primitive underneath every correction path.
 - **Caret avoidance**: the focused app reports its text-cursor rect through the
   IBus `set_cursor_location` vfunc. An IME normally uses that to put a popup
   *next to* the caret; OpenGlide uses it to get *off* the text — if the window
@@ -92,7 +104,7 @@ target app (spec §17) — confirmed on XWayland.
   offers those alternatives + Delete. Correction is no longer limited to the
   newest word. Entries hold absolute offsets into the `injected` mirror; a
   replacement shifts every later entry, and any manual edit drops entries that no
-  longer match. Unit-tested in `../qml-logic-test` (41 assertions, no Qt needed).
+  longer match. Unit-tested in `../qml-logic-test` (69 assertions, no Qt needed).
 - **Show/hide (spec §13)**: three states — Full, Collapsed (the puck), and Hidden
   (no surface at all). Hidden is reached from ⋯ and returns via `ToggleListener`
   (`src/togglelistener.{h,cpp}`), a worker thread watching raw evdev mouse buttons
