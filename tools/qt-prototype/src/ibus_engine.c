@@ -127,6 +127,9 @@ static gboolean og_process_key_event(IBusEngine *engine, guint keyval, guint key
     /* pass = never claim; forward = always claim; auto = pass only Super combos */
     const gboolean pass = (route == OG_ROUTE_PASS) ||
                           (route == OG_ROUTE_AUTO && super);
+    /* diagnostic: is the uinput/physical BackSpace even reaching the engine? */
+    if (keyval == IBUS_KEY_BackSpace && !(state & IBUS_RELEASE_MASK))
+        fprintf(stderr, "[bs] engine received BackSpace press -> %s\n", pass ? "pass" : "forward");
     if (og_content_logging()) {
         const char *n = ibus_keyval_name(keyval);
         fprintf(stderr, "[key] %s state=0x%X -> %s\n", n ? n : "?", state,
