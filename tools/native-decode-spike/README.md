@@ -28,8 +28,11 @@ cd ../../third_party/executorch && git submodule update --init --depth 1 \
 - `spike` — replays Python's exact input tensors, runs native `forward`, asserts
   greedy == `computer` and `max|diff| < 1e-3` vs Python. (The risk gate.)
 - `swipe_engine` — static lib: the reusable native decoder.
-- `corpus_test` — accuracy + latency over a swipe corpus, plus `--sweep`: the
-  ADR-0005 aspect-ratio pre-check (see below).
+- `corpus_test` — accuracy + latency over a swipe corpus, plus `--sweep` (the
+  ADR-0005 aspect pre-check) and `--diagnose` (the ADR-0006 miss taxonomy).
+- `aspect_model_test`, `doubling_test` — header-only unit tests; **no model, no
+  dictionary, no ExecuTorch**, so they run anywhere:
+  `g++ -std=c++20 -I. -o /tmp/t doubling_test.cpp && /tmp/t`
 
 ## Run
 ```
@@ -39,6 +42,42 @@ MODEL=$(ls ../../tools/futo-spike/models/hub/models--futo-org--futo-swipe/snapsh
 .venv/bin/python dump_corpus.py ../../tools/futo-spike/corpus-controlled.jsonl /tmp/corpus_flat.txt
 ./build/corpus_test "$MODEL" /usr/share/dict/american-english /tmp/corpus_flat.txt
 ```
+
+### Why a miss missed (ADR-0006 F2)
+```
+./build/corpus_test "$MODEL" /usr/share/dict/american-english /tmp/corpus_flat.txt --diagnose
+```
+F2 splits misses into *rerank-able* and *buried*, and only the first is fixable by
+a context re-ranker. But "buried" has **three** causes with three different fixes,
+and they were previously guessed at. A word is scored only if every letter
+survives the per-timestep top-3 `alph` prune, its length is ≤ `greedy_len + 3`,
+and `|wordlen − greedylen| ≤ 3`. `--diagnose` reports which prune removed it — or
+its rank and score gap if it was there and merely lost — and prints a tally:
+
+```
+  out-ranked      <- a re-ranker CAN fix these
+  length-pruned   <- widen/soften the |wlen-glen| band
+  alph-pruned     <- widen the per-timestep top-3 letter set
+  not-in-dict     <- lexicon gap; no decoder change helps
+```
+
+Note the prune conditions are mirrored in `decode()`'s diagnostic block; if the
+trie walk's pruning changes, that block must change with it.
+
+### Double-letter cap (ADR-0006 lever 1a)
+A glide crosses a doubled key once, so greedy emits a single letter. The bonus for
+re-doubling used to require **exactly one** doubling, which made `coffee` (needs
+`ff` *and* `ee`) structurally unreachable at any beam width — a scoring cap
+misfiled as a search-depth problem. `count_doublings()` (`doubling.h`) now handles
+N pairs:
+```
+./build/corpus_test ... --doublings 1    # old behaviour
+./build/corpus_test ... --doublings 2    # default
+```
+A/B them; accept only with zero regressions. `doubling_test` guards the important
+invariant: `help`/`helo` still earns **no** bonus — that pair is what killed the
+frequency prior, and a doubling bonus firing on it would reintroduce the same
+regression by another route.
 
 ### Aspect-ratio band (ADR-0005 step 4)
 The window now resizes freely, so the letter block is no longer pinned at 10:3.

@@ -17,10 +17,17 @@
 #include <string>
 #include <vector>
 
-struct Result { int n = 0, top1 = 0, top5 = 0; double total_ms = 0; };
+struct Result {
+    int n = 0, top1 = 0, top5 = 0;
+    double total_ms = 0;
+    // ADR-0006 F2 taxonomy: WHY each miss missed. Only `outranked` is fixable by
+    // a re-ranker; the others need the decode/scoring to surface the word first,
+    // and each of the three has a different fix.
+    int miss_dict = 0, miss_alph = 0, miss_len = 0, miss_outranked = 0, miss_other = 0;
+};
 
 static Result run(SwipeEngine& eng, const char* corpus, float aspect, bool verbose,
-                  bool wordModel, const float centres[26][2]) {
+                  bool wordModel, const float centres[26][2], bool diagnose = false) {
     Result r;
     const float k = aspect / kCaptureAspect;
     std::ifstream f(corpus);
@@ -36,7 +43,9 @@ static Result run(SwipeEngine& eng, const char* corpus, float aspect, bool verbo
 
         auto t0 = std::chrono::steady_clock::now();
         std::string greedy;
-        auto cands = eng.decode(pts, &greedy);
+        DecodeDiag diag;
+        if (diagnose) diag.target = target;
+        auto cands = eng.decode(pts, &greedy, diagnose ? &diag : nullptr);
         const double ms = std::chrono::duration<double, std::milli>(
                               std::chrono::steady_clock::now() - t0).count();
         r.total_ms += ms;
@@ -51,6 +60,29 @@ static Result run(SwipeEngine& eng, const char* corpus, float aspect, bool verbo
                         r.n, target.c_str(), (greedy.empty() ? "-" : greedy.c_str()),
                         (cands.empty() ? "-" : cands[0].text.c_str()),
                         hit1 ? "OK" : "..", ms);
+
+        if (diagnose && !hit1) {
+            const std::string v = diag.verdict();
+            if      (v == "not-in-dict")   r.miss_dict++;
+            else if (v == "alph-pruned")   r.miss_alph++;
+            else if (v == "length-pruned") r.miss_len++;
+            else if (v == "out-ranked")    r.miss_outranked++;
+            else                           r.miss_other++;
+            std::printf("     -> %-13s ", v.c_str());
+            if (v == "alph-pruned")
+                std::printf("letter '%c' never in any timestep's top-3", diag.alph_blocker);
+            else if (v == "length-pruned")
+                std::printf("|%d - %d| = %d > 3  (maxwlen %d)", (int)target.size(), diag.greedy_len,
+                            std::abs((int)target.size() - diag.greedy_len), diag.max_word_len);
+            else if (v == "out-ranked")
+                std::printf("rank %d, score %.2f vs top %.2f (gap %.2f)", diag.rank + 1,
+                            diag.score, diag.top_score, diag.top_score - diag.score);
+            else if (v == "not-in-dict")
+                std::printf("absent from the lexicon");
+            if (diag.doublings > 0)
+                std::printf("   [needs %d doubling%s]", diag.doublings, diag.doublings > 1 ? "s" : "");
+            std::printf("\n");
+        }
     }
     return r;
 }
@@ -67,7 +99,13 @@ int main(int argc, char** argv) {
             "             ADR-0005 pre-check for how far free resizing may go\n"
             "  --model    word (default) decomposes against the target word's\n"
             "             key-centre polyline, so overshoot scales with aspect;\n"
-            "             line uses a local straight fit, which does NOT scale it\n");
+            "             line uses a local straight fit, which does NOT scale it\n"
+            "  --diagnose for every miss, report WHY it missed — which prune\n"
+            "             removed the word, or its rank if it was merely\n"
+            "             out-scored — plus a tally (ADR-0006 F2)\n"
+            "  --doublings N  cap on collapsed pairs the double-letter bonus\n"
+            "             rewards. 1 = the old behaviour (coffee unreachable),\n"
+            "             2 = default. A/B these against the corpus.\n");
         return 2;
     }
 
@@ -80,10 +118,17 @@ int main(int argc, char** argv) {
     float aspect = kCaptureAspect;
     bool sweep = false;
     bool wordModel = true;   // key-centre polyline; --model line for the old one
+    bool diagnose = false;
+    int  maxDoublings = -1;  // -1 = engine default
 
     int pos = 4;
     for (int i = 4; i < argc; i++) {
         if (!std::strcmp(argv[i], "--sweep")) { sweep = true; continue; }
+        if (!std::strcmp(argv[i], "--diagnose")) { diagnose = true; continue; }
+        if (!std::strcmp(argv[i], "--doublings") && i + 1 < argc) {
+            maxDoublings = std::atoi(argv[++i]);
+            continue;
+        }
         if (!std::strcmp(argv[i], "--model") && i + 1 < argc) {
             const char* m = argv[++i];
             if (!std::strcmp(m, "line")) wordModel = false;
@@ -106,6 +151,7 @@ int main(int argc, char** argv) {
 
     SwipeEngine eng(model, dict, freq);
     if (lambda >= 0.0) eng.set_freq_lambda(lambda);
+    if (maxDoublings >= 0) eng.set_max_doublings(maxDoublings);
     if (!eng.ready()) { std::fprintf(stderr, "engine not ready\n"); return 1; }
 
     // The geometry the decoder is actually scoring against — same source the UI
@@ -120,11 +166,22 @@ int main(int argc, char** argv) {
         if (aspect != kCaptureAspect)
             std::printf("(re-projected to aspect %.2f — k=%.2f on y deviations)\n",
                         aspect, aspect / kCaptureAspect);
-        const Result r = run(eng, corpus, aspect, true, wordModel, centres);
+        const Result r = run(eng, corpus, aspect, true, wordModel, centres, diagnose);
         if (r.n > 0)
             std::printf("\n=== native corpus: %d glides | top-1 %d (%.0f%%) | top-5 %d (%.0f%%) | avg decode %.1f ms ===\n",
                         r.n, r.top1, 100.0 * r.top1 / r.n, r.top5, 100.0 * r.top5 / r.n,
                         r.total_ms / r.n);
+        if (diagnose) {
+            const int miss = r.n - r.top1;
+            std::printf("\n=== why the %d miss(es) missed (ADR-0006 F2) ===\n", miss);
+            std::printf("  out-ranked     %2d   <- a re-ranker CAN fix these\n", r.miss_outranked);
+            std::printf("  length-pruned  %2d   <- widen/soften the |wlen-glen| band\n", r.miss_len);
+            std::printf("  alph-pruned    %2d   <- widen the per-timestep top-3 letter set\n", r.miss_alph);
+            std::printf("  not-in-dict    %2d   <- lexicon gap, no decoder change helps\n", r.miss_dict);
+            if (r.miss_other) std::printf("  other          %2d\n", r.miss_other);
+            std::printf("Only the first line is re-rankable. The rest need decode/scoring work,\n"
+                        "and each line points at a DIFFERENT fix — that is the whole point.\n");
+        }
         return 0;
     }
 

@@ -55,6 +55,26 @@ capture to `/tmp/glidetest.log`.
   post-hoc re-ranker can recover a word the decoder buried** — there is nothing
   to re-rank up. These need the decode/scoring itself to surface the word.
 
+> **Addendum 2026-08-11 — "buried" has three causes, not one, and they were being
+> guessed at.** A word is scored only if every letter survives the per-timestep
+> top-3 `alph` prune, its length is ≤ `greedy_len + 3`, and
+> `|wordlen − greedylen| ≤ 3`. Each of those has a different fix, and none of them
+> is "wider beam". `decode()` now takes an optional `DecodeDiag` naming which
+> prune removed the word (or its rank if it was merely out-scored), and
+> `corpus_test --diagnose` prints a per-miss verdict plus a tally. **The §Decision
+> ordering below should be re-derived from that tally**, since it currently rests
+> on three words.
+>
+> Two specifics already established by reading the code:
+> - **`coffee` was never a depth problem.** The double-letter bonus required
+>   `word.size() == greedy.size() + 1` — exactly ONE doubling — so `coffee`
+>   (needs `ff` *and* `ee`) could not receive it at any beam width. That is a
+>   scoring cap. `count_doublings()` now handles N pairs, tunable via
+>   `--doublings` (1 = old behaviour) so the two can be A/B'd directly.
+> - **`because` may be length-pruned, not out-ranked.** At 7 letters it survives
+>   only if greedy came out ≥ 4 characters; a shorter greedy excludes it from
+>   scoring entirely. `--diagnose` answers this definitively.
+
 ### F3. Context rescoring is real, and avoids the frequency-prior trap
 Re-ranking the top-K with a sequence model (n-gram / LM) is exactly what
 smartphone keyboards do. Crucially it disambiguates where frequency could not:
@@ -109,6 +129,13 @@ re-ranking is useless without decode depth:
 
 ## Verification gates
 
+- [ ] **Run `corpus_test --diagnose` and record the miss tally** (out-ranked /
+  length-pruned / alph-pruned / not-in-dict) in RESULTS.md — this is what turns
+  F2 from a three-word anecdote into a measurement, and it should come *before*
+  the depth-vs-rescoring ordering is locked.
+- [ ] **A/B the doubling cap**: `--doublings 1` vs `--doublings 2` on the
+  controlled corpus. Accept only with zero regressions (`hello`, `good`, and the
+  doubles that already recover must all still work; `help` must still not).
 - [ ] Decode-depth probe: on the controlled corpus **and** a fresh ≥30-real-glide
   set, the change lifts top-1 with zero regressions vs the current decoder.
   Source: `tools/` probe + `corpus_test`.

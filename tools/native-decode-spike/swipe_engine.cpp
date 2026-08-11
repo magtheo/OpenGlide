@@ -1,5 +1,6 @@
 // SwipeEngine implementation — native port of futo-spike's decoder.
 #include "swipe_engine.h"
+#include "doubling.h"
 
 #include <executorch/runtime/platform/runtime.h>
 #include <executorch/runtime/core/evalue.h>
@@ -26,7 +27,6 @@ static constexpr int T_OUT = 32;    // emission timesteps
 static constexpr int VOCAB = 65;    // 26 letters + blank@64
 static constexpr int BLANK = 64;
 static constexpr double NEG = -1e18;
-static constexpr float DOUBLE_LETTER_BONUS = 4.5f;  // recover doubled letters the glide collapses (good<-god, hello<-helo)
 
 static double lae(double a, double b) {  // logaddexp; exact: max + log1p(exp(-|d|))
     if (a <= NEG) return b;
@@ -255,18 +255,19 @@ void SwipeEngine::score_dfs(TrieNode* node, const double* pL, const double* pB,
 // True if `word` is `greedy` with exactly one letter doubled: collapsing one
 // adjacent-identical pair in `word` yields `greedy`. The glide passes a doubled
 // key once so the model emits a single letter — this recovers good<-god, hello<-helo.
-static bool is_greedy_with_double(const std::string& word, const std::string& greedy) {
-    if (word.size() != greedy.size() + 1) return false;
-    for (size_t k = 0; k + 1 < word.size(); k++) {
-        if (word[k] == word[k + 1]) {
-            std::string collapsed = word.substr(0, k) + word.substr(k + 1);
-            if (collapsed == greedy) return true;
-        }
-    }
-    return false;
+
+const char* DecodeDiag::verdict() const {
+    if (target.empty())  return "";
+    if (rank == 0)       return "won";
+    if (!in_dict)        return "not-in-dict";
+    if (!alph_ok)        return "alph-pruned";
+    if (!len_ok)         return "length-pruned";
+    if (was_scored)      return "out-ranked";
+    return "unscored";
 }
 
-std::vector<Candidate> SwipeEngine::decode(const std::vector<SwipePoint>& pts, std::string* greedy_out) {
+std::vector<Candidate> SwipeEngine::decode(const std::vector<SwipePoint>& pts, std::string* greedy_out,
+                                           DecodeDiag* diag) {
     std::vector<Candidate> result;
     if (!ready_ || pts.size() < 4) return result;
     // Overshoot adapter (§6.3): drop trailing out-of-bounds points (mouse momentum
@@ -317,8 +318,10 @@ std::vector<Candidate> SwipeEngine::decode(const std::vector<SwipePoint>& pts, s
     // Double-letter recovery: boost candidates that are the greedy with one
     // letter doubled (good<-god, hello<-helo) — the targeted fix the frequency
     // prior can't provide (e.g. "help" beats "hello" on both CTC and frequency).
-    for (auto& s : scored)
-        if (is_greedy_with_double(s.second, g)) s.first += DOUBLE_LETTER_BONUS;
+    for (auto& s : scored) {
+        const int d = count_doublings(s.second, g);
+        if (d >= 1 && d <= max_doublings_) s.first += double_bonus_ * float(d);
+    }
     // Personalization: favor words the user actually uses. Snapshot under lock
     // (bump() runs on the UI thread) + add user_lambda*log(count+1) before ranking.
     std::unordered_map<std::string, long> usnap;
@@ -331,6 +334,52 @@ std::vector<Candidate> SwipeEngine::decode(const std::vector<SwipePoint>& pts, s
     }
     std::sort(scored.begin(), scored.end(),
               [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    // ---- ADR-0006 F2: why did the expected word not win? --------------------
+    // The prune conditions mirrored here MUST track score_dfs()/the walk above:
+    // a word is scored iff every letter is in `alph`, its length <= maxwlen, and
+    // |len - glen| <= 3. If those change, change these.
+    if (diag && !diag->target.empty()) {
+        const std::string& tw = diag->target;
+        diag->greedy = g;
+        diag->greedy_len = glen;
+        diag->max_word_len = maxwlen;
+        diag->doublings = count_doublings(tw, g);
+
+        const TrieNode* n = root_.get();
+        bool path = true;
+        for (char c : tw) {
+            if (c < 'a' || c > 'z') { path = false; break; }
+            const TrieNode* nx = nullptr;
+            for (const auto& ch : n->children)
+                if (ch->letter == (int8_t)(c - 'a')) { nx = ch.get(); break; }
+            if (!nx) { path = false; break; }
+            n = nx;
+        }
+        diag->in_dict = path && n->is_word;
+
+        diag->alph_ok = true;
+        for (char c : tw) {
+            if (c < 'a' || c > 'z' || !alph[c - 'a']) {
+                diag->alph_ok = false;
+                diag->alph_blocker = c;
+                break;
+            }
+        }
+        const int wl = (int)tw.size();
+        diag->len_ok = (wl <= maxwlen) && (std::abs(wl - glen) <= 3);
+
+        for (int i = 0; i < (int)scored.size(); i++) {
+            if (scored[i].second == tw) {
+                diag->was_scored = true;
+                diag->rank = i;
+                diag->score = scored[i].first;
+                break;
+            }
+        }
+        diag->top_score = scored.empty() ? 0.0f : scored[0].first;
+    }
+
     for (int i = 0; i < 5 && i < (int)scored.size(); i++)
         result.push_back({scored[i].second, scored[i].first});
     return result;
