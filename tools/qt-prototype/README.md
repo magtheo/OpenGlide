@@ -62,6 +62,13 @@ target app (spec §17) — confirmed on XWayland.
 - **Key geometry is loaded, not hard-coded** (spec §7.2): `languages/en/layout.json`
   → `SwipeEngine::set_layout()` → read back → `decoder.keys` → QML. One file, both
   consumers. A malformed layout is rejected whole and the built-in QWERTY stands.
+- **Recent-word history (spec §9.3)**: the four chrome slots are contextual —
+  candidates right after a glide, the recent words once those go stale. Each
+  history word keeps the candidate list its own glide produced, so clicking it
+  offers those alternatives + Delete. Correction is no longer limited to the
+  newest word. Entries hold absolute offsets into the `injected` mirror; a
+  replacement shifts every later entry, and any manual edit drops entries that no
+  longer match. Unit-tested in `../qml-logic-test` (41 assertions, no Qt needed).
 - **Show/hide (spec §13)**: three states — Full, Collapsed (the puck), and Hidden
   (no surface at all). Hidden is reached from ⋯ and returns via `ToggleListener`
   (`src/togglelistener.{h,cpp}`), a worker thread watching raw evdev mouse buttons

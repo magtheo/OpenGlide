@@ -112,19 +112,35 @@ settles the layout, resize, and visibility model. Ordered work:
    needs the model + ExecuTorch build. Then clamp the window's resize range to
    the rows that hold, and confirm with real glides captured at the edge
    aspects. The live aspect is shown in the diagnostics overlay.
-5. **History bar** (§9.3) in the reclaimed space; caret avoidance via the unused
-   `set_cursor_location` IBus vfunc.
+5. ~~**Recent-word history** (§9.3)~~ ✅ — and it cost no layout. The four chrome
+   slots are contextual: right after a glide they show that word's candidates
+   (as before), and once those go stale they become the **recent words**, each
+   still carrying the candidate list its own glide produced. Clicking one opens
+   its alternatives + Delete. So correction is no longer limited to the newest
+   word — previously an older mistake could only be fixed by backspacing
+   everything after it, which is the expensive kind of error for a mouse-only
+   user (spec §36 counts pointer travel). The glide surface stays at 60%.
+   History entries carry absolute offsets into the mirror, so a replacement
+   shifts every later entry and any manual edit invalidates whatever no longer
+   matches. `tools/qml-logic-test` unit-tests all of it against a simulated
+   target buffer (41 assertions, no Qt/display/decoder needed).
+   Not included: "Add to dictionary" (§9.3) — it needs the personal dictionary
+   (§10.2) to reach the decode lexicon; bumping a word the trie doesn't contain
+   would do nothing, so offering it would be a lie.
+6. **Caret avoidance** via the still-unused `set_cursor_location` IBus vfunc;
+   snap-to-edge / docked mode (§7.4); tray entry + a settings UI for §13.6.
 
 > ⚠️ Steps 0–2 are **built and tested on hardware** (magtheo, 2026-08-11) — plus a
 > follow-up fix there: `og_ibus_backspace` was blocking the UI thread up to 500 ms
 > per delete, which piled up under hold-⌫ repeat and froze the session; it is now
 > fire-and-forget.
-> Step 3 and the step-4 harness were written on a box with **no Qt Quick and no
+> Steps 3–5 and the step-4 harness were written on a box with **no Qt Quick and no
 > ExecuTorch**: qmllint-clean, `-fsyntax-only` clean against real Qt 6 headers,
-> and the two pieces of non-trivial logic are unit-tested standalone (the chord
-> state machine, 13 cases incl. "ordinary clicking never fires" and "a long glide
-> then a right-click never fires"; the aspect re-projection, 5 cases). But
-> **nothing new has been compiled or rendered.**
+> and every piece of non-trivial logic is unit-tested standalone — the chord state
+> machine (13 cases incl. "ordinary clicking never fires" and "a long glide then a
+> right-click never fires"), the aspect re-projection (5 cases), and the history
+> text model (41 assertions, `tools/qml-logic-test`). But **nothing new has been
+> compiled or rendered.**
 
 Also Phase 2 per spec §28: ~~personalization~~ ✅, personal dictionary, SQLite,
 punctuation, settings UI.

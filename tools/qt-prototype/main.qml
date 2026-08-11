@@ -76,8 +76,35 @@ Window {
     property real   decMs: 0.0
     property bool   pending: false
     property bool   lastShort: false
-    property string lastWord: ""
     property bool   timedOut: false
+    // Recent-word history (spec §9.3). Each entry remembers where the word sits
+    // in `injected` and the candidate list its glide produced, so ANY of the last
+    // few words can still be corrected in one click — not just the newest one,
+    // which was the previous limit and the expensive kind of mistake for a
+    // mouse-only user (the alternative is backspacing everything after it).
+    property var    history: []      // [{text, cands, start, len}]
+    property int    histOpen: -1     // index into history whose popup is open
+    property real   histOpenX: 0
+    readonly property int histMax: 12
+
+    // What the chrome slots show. Right after a glide those slots ARE the
+    // alternatives for the word just committed, so candidates take priority;
+    // once the candidates are stale (you typed, spaced, punctuated) the same
+    // slots become the recent words, each still carrying its own alternatives.
+    // Contextual, so history costs no permanent rows and the glide surface stays
+    // at 60% (ADR-0005 §1).
+    readonly property bool showingHistory: candidates.length === 0 && history.length > 0
+    readonly property var chromeSlots: {
+        var a = [];
+        if (candidates.length > 0) {
+            for (var i = 0; i < Math.min(4, candidates.length); i++)
+                a.push({text: candidates[i].text, hist: false, idx: i});
+            return a;
+        }
+        for (var j = Math.max(0, history.length - 4); j < history.length; j++)
+            a.push({text: history[j].text, hist: true, idx: j});
+        return a;
+    }
     property bool   decoderDead: false
     property string injected: ""
     property string activeKey: ""
@@ -137,11 +164,71 @@ Window {
     // ================= injection ops (keep `injected` in sync with the target) ==
     function commitDecoded(word) {
         const w = shiftState > 0 ? word.charAt(0).toUpperCase() + word.substring(1) : word;
+        const start = injected.length;
         injector.commit(w);
         injected += w + " ";
-        lastWord = w;
         decoder.bumpWord(word);     // personalization keys on the dictionary form
         consumeShift();
+        pushHistory(w, candidates, start);
+    }
+
+    // ================= recent-word history (spec §9.3) =================
+    function pushHistory(text, cands, start) {
+        var h = history.slice();
+        h.push({text: text, cands: cands, start: start, len: text.length});
+        while (h.length > histMax) h.shift();
+        history = h;
+    }
+    // Entries are only trustworthy while they still match the mirror. Manual
+    // editing (backspace, word-delete, punctuation collapsing a space) moves the
+    // text under them, so re-check and drop whatever no longer lines up rather
+    // than correcting the wrong span later.
+    function trimHistory() {
+        var h = [];
+        for (var i = 0; i < history.length; i++) {
+            const e = history[i];
+            if (injected.substr(e.start, e.len) === e.text) h.push(e);
+        }
+        if (h.length !== history.length) history = h;
+        if (histOpen >= history.length) histOpen = -1;
+    }
+    // Replace history entry `hi`, retyping whatever follows it (spec §9.2 — with
+    // a rich IME this would be a direct replacement; here it is delete + recommit).
+    function replaceHistory(hi, newText) {
+        if (hi < 0 || hi >= history.length) return;
+        const e = history[hi];
+        if (injected.substr(e.start, e.len) !== e.text) { trimHistory(); return; }
+        if (newText === e.text) return;
+        const suffix = injected.substring(e.start + e.len);
+        injector.backspace(e.len + suffix.length);
+        injector.commitExact(newText + suffix);
+        injected = injected.substring(0, e.start) + newText + suffix;
+        const delta = newText.length - e.len;
+        var h = history.slice();
+        h[hi] = {text: newText, cands: e.cands, start: e.start, len: newText.length};
+        for (var j = hi + 1; j < h.length; j++)
+            h[j] = {text: h[j].text, cands: h[j].cands, start: h[j].start + delta, len: h[j].len};
+        history = h;
+        histOpen = -1;
+        decoder.bumpWord(newText.toLowerCase());   // the user chose this — boost it
+    }
+    function deleteHistory(hi) {
+        if (hi < 0 || hi >= history.length) return;
+        const e = history[hi];
+        if (injected.substr(e.start, e.len) !== e.text) { trimHistory(); return; }
+        const extra = injected[e.start + e.len] === " " ? 1 : 0;   // swallow one space
+        const suffix = injected.substring(e.start + e.len + extra);
+        injector.backspace(e.len + extra + suffix.length);
+        if (suffix.length) injector.commitExact(suffix);
+        injected = injected.substring(0, e.start) + suffix;
+        const delta = -(e.len + extra);
+        var h = history.slice();
+        h.splice(hi, 1);
+        for (var j = hi; j < h.length; j++)
+            h[j] = {text: h[j].text, cands: h[j].cands, start: h[j].start + delta, len: h[j].len};
+        history = h;
+        histOpen = -1;
+        candidates = [];
     }
     function typeKey(c) {
         const ch = shifted(c);
@@ -158,44 +245,42 @@ Window {
         }
         injector.typeChar(p); injector.typeChar(" ");
         injected += p + " ";
+        trimHistory();          // the collapsed space moved everything after it
     }
     function deleteChar() {
         if (!injected.length) return;
-        candidates = []; lastWord = "";   // editing invalidates the last glide's suggestions
+        candidates = [];                  // editing invalidates the last glide's suggestions
         injector.backspace(1);
         injected = injected.substring(0, injected.length - 1);
+        trimHistory();
     }
     function deleteWord() {                      // backspace-swipe: trailing spaces + one word
         if (!injected.length) return "";
-        candidates = []; lastWord = "";
+        candidates = [];
         var i = injected.length, n = 0;
         while (i > 0 && injected[i - 1] === " ") { i--; n++; }
         while (i > 0 && injected[i - 1] !== " ") { i--; n++; }
         const deleted = injected.substring(i);
         injector.backspace(n);
         injected = injected.substring(0, i);
+        trimHistory();
         return deleted;
     }
     function undoWord(s) {
-        candidates = []; lastWord = "";
+        candidates = [];
         injector.commitExact(s);
         injected += s;
     }
+    // Candidate click. The newest word is just the last history entry, so this is
+    // the same operation the history popup performs — one code path, not two.
     function correct(i) {
-        if (i < 0 || i >= candidates.length) return;
+        if (i < 0 || i >= candidates.length || !history.length) return;
+        const hi = history.length - 1;
+        const old = history[hi].text;
         var nw = candidates[i].text;
-        if (nw === lastWord) return;
-        // Preserve the capitalization the replaced word carried.
-        if (lastWord.length && lastWord[0] !== lastWord[0].toLowerCase())
+        if (old.length && old[0] !== old[0].toLowerCase())   // keep the capitalization
             nw = nw.charAt(0).toUpperCase() + nw.substring(1);
-        if (lastWord.length > 0) {
-            injector.backspace(lastWord.length + 1);
-            injected = injected.substring(0, injected.length - (lastWord.length + 1));
-        }
-        injector.commit(nw);
-        injected += nw + " ";
-        lastWord = nw;
-        decoder.bumpWord(candidates[i].text);
+        replaceHistory(hi, nw);
     }
     // Closest key to the cursor, in PIXELS (the normalized frame is anisotropic).
     function nearestKey(nx, ny) {
@@ -352,26 +437,42 @@ Window {
                 color: win.ibusActive ? pal.accent : pal.muted
             }
 
-            // Candidates in FIXED slots — same word, same place, every glide.
+            // FIXED slots — same word, same place, every glide. Candidates when
+            // they are fresh, recent words otherwise (see chromeSlots).
             Repeater {
                 model: 4
                 Rectangle {
-                    readonly property var cand: index < win.candidates.length ? win.candidates[index] : null
+                    readonly property var slot: index < win.chromeSlots.length ? win.chromeSlots[index] : null
+                    readonly property bool isHist: slot ? slot.hist : false
+                    readonly property bool isTop: slot && !slot.hist && index === 0
                     x: win.u * (0.36 + index * 1.63); y: parent.height * 0.14
                     width: win.u * 1.57; height: parent.height * 0.72
                     radius: height / 2
-                    visible: cand !== null
-                    color: index === 0 ? pal.accent : "#ffffff"
-                    border.color: "#dadce0"; border.width: index === 0 ? 0 : 1
+                    visible: slot !== null
+                    color: isTop ? pal.accent : (isHist ? "transparent" : "#ffffff")
+                    border.color: isHist ? pal.muted : "#dadce0"
+                    border.width: isTop ? 0 : 1
                     Text {
                         anchors.fill: parent; anchors.margins: parent.height * 0.18
-                        text: parent.cand ? parent.cand.text : ""
+                        text: parent.slot ? parent.slot.text : ""
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                         elide: Text.ElideRight
-                        font.bold: index === 0; font.pixelSize: Math.max(8, win.u * 0.26)
-                        color: index === 0 ? pal.accentText : pal.keyText
+                        font.bold: parent.isTop
+                        font.pixelSize: Math.max(8, win.u * 0.26)
+                        color: parent.isTop ? pal.accentText : (parent.isHist ? pal.muted : pal.keyText)
                     }
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.correct(index) }
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (!parent.slot) return;
+                            if (parent.slot.hist) {
+                                win.histOpenX = parent.x;
+                                win.histOpen = win.histOpen === parent.slot.idx ? -1 : parent.slot.idx;
+                            } else {
+                                win.correct(parent.slot.idx);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -685,6 +786,68 @@ Window {
                       + "   ·   ⌨ " + (win.injected.length ? win.injected.replace(/\s+$/, "") : "—")
                 color: pal.committedText
                 font.pixelSize: Math.max(7, win.u * 0.20); font.family: "monospace"
+            }
+        }
+
+        // ---------------- history word → its own alternatives (spec §9.3) ----------------
+        MouseArea {   // click-away
+            anchors.fill: parent; visible: win.histOpen >= 0; z: 55
+            onClicked: win.histOpen = -1
+        }
+        Rectangle {
+            id: histPopup
+            readonly property var entry: win.histOpen >= 0 && win.histOpen < win.history.length
+                                         ? win.history[win.histOpen] : null
+            readonly property var alts: {
+                if (!entry) return [];
+                var a = [];
+                for (var i = 0; i < entry.cands.length && a.length < 4; i++)
+                    if (entry.cands[i].text !== entry.text) a.push(entry.cands[i].text);
+                return a;
+            }
+            visible: entry !== null; z: 56
+            x: Math.max(win.u * 0.1, Math.min(parent.width - width - win.u * 0.1, win.histOpenX))
+            y: win.chromeH
+            width: win.u * 2.6; height: histCol.height + win.u * 0.2
+            color: "#ffffff"; radius: Math.max(3, win.u * 0.12)
+            border.color: "#dadce0"; border.width: 1
+            Column {
+                id: histCol
+                x: 0; y: win.u * 0.1; width: parent.width
+                Repeater {
+                    // Alternatives from that word's own glide, then Delete. "Add to
+                    // dictionary" (spec §9.3) is deliberately absent: it needs the
+                    // personal dictionary (§10.2) to reach the decode lexicon, and
+                    // bumping a word the trie doesn't contain would do nothing.
+                    model: histPopup.alts.length + 1
+                    Rectangle {
+                        readonly property bool isDelete: index === histPopup.alts.length
+                        width: parent.width; height: win.u * 0.58
+                        color: hm.containsMouse ? pal.candBar : "#ffffff"
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            x: win.u * 0.18; width: parent.width - x * 2
+                            elide: Text.ElideRight
+                            text: parent.isDelete ? "Delete" : histPopup.alts[index]
+                            font.pixelSize: Math.max(8, win.u * 0.22)
+                            color: parent.isDelete ? "#c5221f" : pal.keyText
+                        }
+                        MouseArea {
+                            id: hm
+                            anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                const hi = win.histOpen;
+                                if (parent.isDelete) { win.deleteHistory(hi); return; }
+                                const old = win.history[hi].text;
+                                var nw = histPopup.alts[index];
+                                if (old.length && old[0] !== old[0].toLowerCase())
+                                    nw = nw.charAt(0).toUpperCase() + nw.substring(1);
+                                win.replaceHistory(hi, nw);
+                            }
+                        }
+                    }
+                }
             }
         }
 
