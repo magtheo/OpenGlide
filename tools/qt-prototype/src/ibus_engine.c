@@ -141,11 +141,50 @@ static gboolean og_process_key_event(IBusEngine *engine, guint keyval, guint key
     ibus_engine_forward_key_event(engine, keyval, keycode, state);
     return TRUE;
 }
+/* ---- caret location (spec: keep the keyboard off the text) ----------------
+ * set_cursor_location arrives on the GLib thread; QML reads it on the Qt thread,
+ * so the rect is published under a mutex. Guarded by a report counter so callers
+ * can tell "no client ever reported" from "reported at 0,0". */
+static GMutex   g_caret_mu;
+static int      g_caret[4] = {0, 0, 0, 0};
+static unsigned g_caret_n  = 0;
+
+static void og_set_cursor_location(IBusEngine *engine, gint x, gint y, gint w, gint h) {
+    (void)engine;
+    g_mutex_lock(&g_caret_mu);
+    g_caret[0] = x; g_caret[1] = y; g_caret[2] = w; g_caret[3] = h;
+    g_caret_n++;
+    g_mutex_unlock(&g_caret_mu);
+}
+
+bool og_ibus_cursor_rect(int *x, int *y, int *w, int *h) {
+    bool have;
+    g_mutex_lock(&g_caret_mu);
+    have = g_caret_n > 0;
+    if (have) {
+        if (x) *x = g_caret[0];
+        if (y) *y = g_caret[1];
+        if (w) *w = g_caret[2];
+        if (h) *h = g_caret[3];
+    }
+    g_mutex_unlock(&g_caret_mu);
+    return have;
+}
+
+unsigned og_ibus_cursor_reports(void) {
+    unsigned n;
+    g_mutex_lock(&g_caret_mu);
+    n = g_caret_n;
+    g_mutex_unlock(&g_caret_mu);
+    return n;
+}
+
 static void og_engine_init(OgEngine *self) { (void)self; }
 static void og_engine_class_init(OgEngineClass *klass) {
     IBUS_ENGINE_CLASS(klass)->enable            = og_enable;
     IBUS_ENGINE_CLASS(klass)->disable           = og_disable;
     IBUS_ENGINE_CLASS(klass)->process_key_event = og_process_key_event;
+    IBUS_ENGINE_CLASS(klass)->set_cursor_location = og_set_cursor_location;
 }
 
 static gpointer ibus_thread(gpointer arg) {
