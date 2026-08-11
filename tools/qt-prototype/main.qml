@@ -657,7 +657,7 @@ Window {
                     anchors.centerIn: parent; text: "⌫"
                     font.pixelSize: Math.max(10, Math.min(win.u, win.rowH) * 0.50); color: pal.actionText
                 }
-                // tap = char · hold = repeat · hold+swipe-left = word delete · right = undo
+                // tap = word · hold = repeat (char) · hold+swipe-left = word delete · right = undo
                 MouseArea {
                     id: bs
                     anchors.fill: parent
@@ -690,7 +690,7 @@ Window {
                     }
                     onReleased: {
                         holdDelay.stop(); charRepeat.stop();
-                        if (!acted) win.deleteChar();
+                        if (!acted) win.deleteWord();
                     }
                 }
                 Timer { id: holdDelay;  interval: 420; onTriggered: if (!bs.swiping) charRepeat.start() }
