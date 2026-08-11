@@ -126,7 +126,14 @@ bool Injector::commitExact(const QString &s) {
 bool Injector::ibusActive() const { return og_ibus_active(); }
 void Injector::backspace(int n) {
     if (n <= 0) return;
-    if (og_ibus_active()) { og_ibus_backspace(n); return; }   // same path as commit (uinput backspace drifts under IBus)
+    // Always uinput. delete_surrounding_text (the IBus delete API) SIGABRTs
+    // gnome-shell on native Wayland clients — a session-wide crash, reproduced on
+    // backspace 3x — and ibus_engine_forward_key_event(BackSpace) doesn't delete
+    // (clients don't apply it). uinput BackSpace takes the normal key path: under
+    // pass routing og_process_key_event returns FALSE and IBus delivers it like the
+    // hardware key, so it deletes reliably without faulting the shell. Trade: a
+    // uinput delete is no longer ordered with an IBus commit on the same gesture
+    // (replaceHistory), which can drift — recoverable via the history bar.
     if (m_fd < 0 && !setup()) return;
     for (int i = 0; i < n; i++) {
         emitKey(KEY_BACKSPACE, 1);

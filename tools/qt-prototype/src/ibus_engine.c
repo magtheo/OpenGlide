@@ -38,17 +38,17 @@ static volatile IBusEngine *g_engine = NULL;        /* non-NULL => active + has 
 static volatile gint        g_connected = 0;
 static GThread           *g_ibus_thread_id = NULL;   /* for inline dispatch when already on the IBus thread */
 /* Self-test (OPENGLIDE_IBUS_TEST=1) run from a SEPARATE thread — exercises the
- * cross-thread commit path (g_main_context_invoke + wait) that the inline call
- * at enable does NOT, and which is what real glide commits use. */
+ * cross-thread commit path (g_main_context_invoke) that the inline call at enable
+ * does NOT, and which is what real glide commits use. Backspace is no longer
+ * tested here: it's a uinput key event now (delete_surrounding_text crashed
+ * gnome-shell), so it lives in the injector, not the IBus path. */
 static gpointer test_thread(gpointer p) {
     (void)p;
     g_usleep(100000);   /* 100 ms: let the focused sink settle */
     bool c = og_ibus_commit("abcde");
     g_usleep(50000);
-    bool b = og_ibus_backspace(2);   /* delete "de" -> "abc" */
-    g_usleep(50000);
-    bool r = og_ibus_commit("xy");   /* commit AFTER delete (the undo path) -> expect "abcxy" */
-    fprintf(stderr, "[openglide-ibus] TEST commit=%d bs=%d recommit=%d (expect 'abcxy')\n", c, b, r);
+    bool r = og_ibus_commit("xy");   /* second commit must land AFTER the first */
+    fprintf(stderr, "[openglide-ibus] TEST commit=%d recommit=%d (expect 'abcdexy')\n", c, r);
     return NULL;
 }
 static void og_enable(IBusEngine *engine) {
@@ -232,32 +232,6 @@ bool og_ibus_commit(const char *utf8) {
         commit_idle(j);                                  /* already on the GLib thread */
     else
         g_main_context_invoke(g_ctx, commit_idle, j);   /* async: queued, dispatched in order */
-    return true;   /* queued — never blocks the caller */
-}
-
-/* Delete n chars via the engine (delete_surrounding_text — the IME delete API;
- * forwarding KEY_BACKSPACE isn't reliably applied by clients). FIRE-AND-FORGET:
- * queued on the GLib thread + returns immediately, so it never blocks the Qt/UI
- * thread — which under rapid hold-⌫ repeat on slow hardware piled up + froze the
- * session. Safe because the client owns the cursor and D-Bus preserves order, so
- * sequential deletes are applied correctly in order; the idle frees the job. */
-struct backspace_job { int n; };
-static gboolean backspace_idle(gpointer p) {
-    struct backspace_job *j = (struct backspace_job *)p;
-    IBusEngine *e = (IBusEngine *)g_atomic_pointer_get(&g_engine);
-    if (e) ibus_engine_delete_surrounding_text(e, -j->n, (guint)j->n);   /* -n..0 = n chars before cursor */
-    free(j);   /* fire-and-forget: the idle owns + frees the job */
-    return G_SOURCE_REMOVE;
-}
-bool og_ibus_backspace(int n) {
-    if (n <= 0 || !g_ctx || !g_atomic_pointer_get(&g_engine)) return false;
-    struct backspace_job *j = malloc(sizeof *j);
-    if (!j) return false;
-    j->n = n;
-    if (g_ibus_thread_id && g_thread_self() == g_ibus_thread_id)
-        backspace_idle(j);                              /* already on the GLib thread */
-    else
-        g_main_context_invoke(g_ctx, backspace_idle, j);   /* async: queued, processed in order */
     return true;   /* queued — never blocks the caller */
 }
 

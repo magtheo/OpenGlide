@@ -25,13 +25,9 @@ bool og_ibus_connected(void);
 bool og_ibus_active(void);
 
 /* Commit NUL-terminated UTF-8 to the focused field via ibus_engine_commit_text.
- * Synchronous: returns true once committed; false if OpenGlide isn't active
- * (caller should fall back to uinput). */
+ * Fire-and-forget: queues on the GLib thread and returns at once, so it can never
+ * block the caller. Returns false only if OpenGlide isn't active. */
 bool og_ibus_commit(const char *utf8);
-
-/* Delete n chars from the focused field (forward KEY_BACKSPACE via the engine).
- * Same path as og_ibus_commit. Returns false if OpenGlide isn't active. */
-bool og_ibus_backspace(int n);
 
 /* Restore the previous global engine. Call at shutdown. */
 void og_ibus_shutdown(void);
