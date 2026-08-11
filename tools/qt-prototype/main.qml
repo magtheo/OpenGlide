@@ -152,6 +152,56 @@ Window {
     Timer { interval: 1000; repeat: true; running: !decoder.ready && win.visible; onTriggered: win.warmupSecs += 1 }
     Timer { interval: 800; repeat: true; running: win.visible; onTriggered: win.ibusActive = injector.ibusActive() }
 
+    // ================= caret avoidance =================
+    // The focused app reports where its text cursor is (IBus set_cursor_location).
+    // An IME normally uses that to put a candidate popup NEXT to the caret; we
+    // want the opposite — to get out from on top of the text being typed. Spec §17
+    // covers focus; this covers occlusion, which is the other half of "the
+    // keyboard must not be obstructive".
+    //
+    // Deliberately timid: it only ever moves the window when it is genuinely
+    // covering the caret, it moves the minimum distance, it never moves during a
+    // glide or a drag, and it stays inside the screen. Many toolkits never report
+    // at all — then caretReports() stays 0 and this does nothing, which is why it
+    // is safe to leave on.
+    property bool avoidCaret: true
+    property rect caretRect: Qt.rect(0, 0, 0, 0)
+    property int  caretReports: 0
+
+    function checkCaret() {
+        if (!visible || collapsed) return;
+        caretReports = injector.caretReports();
+        if (caretReports <= 0) return;
+        const c = injector.caretRect();
+        caretRect = c;
+        if (!avoidCaret || surface.swiping || menuOpen) return;
+        if (c.width <= 0 && c.height <= 0 && c.x === 0 && c.y === 0) return;
+
+        // Treat a zero-size report as a thin caret so the margin still applies.
+        const ch = c.height > 0 ? c.height : Math.round(u * 0.4);
+        const pad = Math.round(u * 0.35);
+        const top = y, bottom = y + height;
+        const cTop = c.y - pad, cBottom = c.y + ch + pad;
+        if (cBottom <= top || cTop >= bottom) return;            // already clear of it
+
+        const scr = Screen.desktopAvailableHeight;
+        const below = cBottom;                    // window top if we sit under it
+        const above = cTop - height;              // window top if we sit over it
+        const canBelow = below + height <= scr;
+        const canAbove = above >= 0;
+        var ny = y;
+        if (canBelow && canAbove)      ny = (Math.abs(below - y) <= Math.abs(above - y)) ? below : above;
+        else if (canBelow)             ny = below;
+        else if (canAbove)             ny = above;
+        else                           return;    // nowhere to go; leave it alone
+        if (ny !== y) y = ny;
+    }
+    Timer {
+        interval: 500; repeat: true
+        running: win.visible && !win.collapsed
+        onTriggered: win.checkCaret()
+    }
+
     // Human-readable name for the configured global gesture (spec §13.6).
     function toggleGesture() {
         const m = toggleListener.mode;
@@ -399,6 +449,8 @@ Window {
         const sy = parseInt(settings.value("window/y", -1));
         if (sx >= 0 && sy >= 0) { win.x = sx; win.y = sy; }
         win.expandedW = win.width; win.expandedH = win.height;
+        win.avoidCaret = settings.value("window/avoidCaret", true) !== false
+                      && String(settings.value("window/avoidCaret", true)) !== "false";
     }
 
     Timer {
@@ -833,6 +885,9 @@ Window {
                 text: win.stateText() + "   ·   aspect " + win.letterAspect.toFixed(2)
                       + "   ·   " + decoder.layoutId
                       + "   ·   toggle: " + toggleListener.status
+                      + "   ·   caret: " + (win.caretReports > 0
+                            ? win.caretRect.x + "," + win.caretRect.y + " ×" + win.caretReports
+                            : "never reported")
                       + "   ·   ⌨ " + (win.injected.length ? win.injected.replace(/\s+$/, "") : "—")
                 color: pal.committedText
                 font.pixelSize: Math.max(7, win.u * 0.20); font.family: "monospace"
@@ -922,6 +977,7 @@ Window {
                         {g: "Medium · 560×280",  act: "m"},
                         {g: "Large  · 720×360",  act: "l"},
                         {g: "Hide completely",   act: "hide"},
+                        {g: "Avoid the caret",   act: "caret"},
                         {g: "Diagnostics",       act: "diag"},
                         {g: "Quit OpenGlide",    act: "quit"}
                     ]
@@ -934,7 +990,9 @@ Window {
                             x: win.u * 0.22
                             width: parent.width - x * 2
                             elide: Text.ElideRight
-                            text: modelData.act === "diag" && win.showDiagnostics ? "✓ " + modelData.g
+                            text: modelData.act === "caret" ? (win.avoidCaret ? "✓ " : "") + modelData.g
+                                     + (win.caretReports > 0 ? "" : " (app never reports)")
+                                  : modelData.act === "diag" && win.showDiagnostics ? "✓ " + modelData.g
                                   : modelData.act === "hide" ? (toggleListener.available
                                         ? "Hide · " + win.toggleGesture() + " to return"
                                         : "Hide — needs /dev/input access")
@@ -953,6 +1011,11 @@ Window {
                                 else if (modelData.act === "m")    win.preset(560, 280);
                                 else if (modelData.act === "l")    win.preset(720, 360);
                                 else if (modelData.act === "hide") win.hideCompletely();
+                                else if (modelData.act === "caret") {
+                                    win.avoidCaret = !win.avoidCaret;
+                                    settings.setValue("window/avoidCaret", win.avoidCaret);
+                                    win.menuOpen = false;
+                                }
                                 else if (modelData.act === "diag") { win.showDiagnostics = !win.showDiagnostics; win.menuOpen = false; }
                                 else { win.persistGeometry(); Qt.quit(); }
                             }

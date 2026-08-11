@@ -79,6 +79,13 @@ target app (spec §17) — confirmed on XWayland.
   the chrome for 8 s and restores the word *and* its alternatives); hold = one
   char immediately, then repeat every 70 ms; hold+swipe-left = multi-word delete
   with the dot gauge; swipe-right = undo within that gesture.
+- **Caret avoidance**: the focused app reports its text-cursor rect through the
+  IBus `set_cursor_location` vfunc. An IME normally uses that to put a popup
+  *next to* the caret; OpenGlide uses it to get *off* the text — if the window
+  covers the caret it slides above or below, whichever is nearer, never during a
+  glide, always on screen. Toggle in ⋯ (persisted). Many toolkits never report it,
+  in which case this does nothing — the diagnostics line shows `caret: x,y ×N` or
+  "never reported", so you can see which.
 - **Recent-word history (spec §9.3)**: the four chrome slots are contextual —
   candidates right after a glide, the recent words once those go stale. Each
   history word keeps the candidate list its own glide produced, so clicking it

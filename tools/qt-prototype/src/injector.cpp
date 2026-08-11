@@ -124,6 +124,14 @@ bool Injector::commitExact(const QString &s) {
 }
 
 bool Injector::ibusActive() const { return og_ibus_active(); }
+
+QRect Injector::caretRect() const {
+    int x = 0, y = 0, w = 0, h = 0;
+    if (!og_ibus_cursor_rect(&x, &y, &w, &h)) return {};
+    return QRect(x, y, w, h);
+}
+
+int Injector::caretReports() const { return int(og_ibus_cursor_reports()); }
 void Injector::backspace(int n) {
     if (n <= 0) return;
     // uinput ONLY. delete_surrounding_text (the IBus delete API) SIGABRTs gnome-shell

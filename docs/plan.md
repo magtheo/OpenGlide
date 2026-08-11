@@ -105,14 +105,14 @@ settles the layout, resize, and visibility model. Ordered work:
    Still to do here: tray entry, a settings UI for §13.6, and the §13.3 question
    (the chord isn't suppressed, so the app underneath still sees left+right —
    live with it before building an interception layer).
-4. ~~**Aspect-ratio band**~~ ✅ (pre-check) — `corpus_test --sweep` run
-   2026-08-11: **no cliff**, top-1 flat at the 94% baseline from 10:5 to 10:1.8,
-   latency flat. **Resizing stays unclamped.** Caveat worth keeping in view: the
-   transform scales the residual from a locally-straight path, so *trailing
-   overshoot* — the one mechanism RESULTS.md shows corrupts decode — isn't
-   amplified by it, and the dangerous case is under-tested. Cheap way to close it
-   properly: decompose against the target word's key-centre polyline (the corpus
-   carries the target) rather than a local line.
+4. **Aspect-ratio band** — first sweep (2026-08-11) showed **no cliff**, top-1
+   flat at the 94% baseline from 10:5 to 10:1.8, so **resizing stays unclamped**.
+   But that run used the `line` model, which is structurally blind to trailing
+   overshoot — the one mechanism RESULTS.md shows corrupts decode — so a flat
+   result was close to guaranteed. The key-centre-polyline model is now built and
+   is the default (`--model word`); it amplifies overshoot 1.56× at k=1.67 where
+   the old one left it at 1.00×. **Re-run `--sweep`** to find out whether "no
+   cliff" survives a model that can actually see the failure.
 5. ~~**Recent-word history** (§9.3)~~ ✅ — and it cost no layout. The four chrome
    slots are contextual: right after a glide they show that word's candidates
    (as before), and once those go stale they become the **recent words**, each
@@ -128,8 +128,17 @@ settles the layout, resize, and visibility model. Ordered work:
    Not included: "Add to dictionary" (§9.3) — it needs the personal dictionary
    (§10.2) to reach the decode lexicon; bumping a word the trie doesn't contain
    would do nothing, so offering it would be a lie.
-6. **Caret avoidance** via the still-unused `set_cursor_location` IBus vfunc;
-   snap-to-edge / docked mode (§7.4); tray entry + a settings UI for §13.6.
+6. ~~**Caret avoidance**~~ ✅ — `set_cursor_location` is implemented in
+   `ibus_engine.c`: the focused app reports its caret rect, and where an IME
+   normally uses that to place a popup *next to* the caret, we use it to get
+   *off* the text. The window slides above or below — whichever is nearer — only
+   when it genuinely covers the caret, never mid-glide or mid-menu, always on
+   screen. Toggle in ⋯, persisted. Many toolkits never report; then it is a
+   no-op, which is why it ships on. The diagnostics overlay shows the live rect
+   and a report count, so the app is its own probe for the ADR-0005 gate.
+7. **Remaining**: snap-to-edge / docked mode (§7.4); tray entry + a settings UI
+   for §13.6; and the §13.3 question — the chord isn't suppressed, so the app
+   underneath still sees left+right. Live with it before building interception.
 
 > ⚠️ Steps 0–2 are **built and tested on hardware** (magtheo, 2026-08-11) — plus a
 > follow-up fix there: `og_ibus_backspace` was blocking the UI thread up to 500 ms

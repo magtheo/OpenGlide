@@ -3,6 +3,7 @@
 // arbitrary UTF-8 needs the input-method/IBus path (not wired here yet).
 #pragma once
 #include <QObject>
+#include <QRect>
 #include <QString>
 
 class Injector : public QObject {
@@ -20,6 +21,12 @@ public:
     Q_INVOKABLE void typeChar(const QString &ch);
     // OpenGlide is the active IME -> commits route via IBus (UTF-8); else uinput fallback.
     Q_INVOKABLE bool ibusActive() const;
+    // Where the focused app says its text cursor is, in screen pixels — used to
+    // keep the keyboard off the text being typed. Empty rect if no client has
+    // ever reported one (many toolkits never do).
+    Q_INVOKABLE QRect caretRect() const;
+    // Number of caret reports received; 0 = this app never reports, don't wait.
+    Q_INVOKABLE int caretReports() const;
 
 private:
     bool setup();                 // create the uinput device once
