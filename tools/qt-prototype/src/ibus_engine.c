@@ -62,9 +62,23 @@ static void og_disable(IBusEngine *engine) {
     g_atomic_pointer_set(&g_engine, NULL);
     fprintf(stderr, "[openglide-ibus] disabled\n");
 }
-/* Pass-through: forward every physical key event to the client so normal typing
- * keeps working while OpenGlide is the active IME (else it would absorb keys). */
+/* Pass-through: forward physical key events so normal typing keeps working while
+ * OpenGlide is the active IME. But never CLAIM a Super (Mod4) combo:
+ * ibus_engine_forward_key_event re-injects the key as a SYNTHETIC event into the
+ * focused input context, which types its glyph and starves GNOME's compositor
+ * shortcut of the real key (Super+1 should open dock slot 1; instead it typed
+ * "1"). Returning FALSE lets IBus deliver Super combos via the normal path, so
+ * the compositor sees them. Plain keys still forward as before. */
 static gboolean og_process_key_event(IBusEngine *engine, guint keyval, guint keycode, guint state) {
+    const gboolean super = (state & IBUS_MOD4_MASK) ||
+        keyval == IBUS_KEY_Super_L || keyval == IBUS_KEY_Super_R;
+    if (getenv("OPENGLIDE_KEY_DEBUG")) {        /* per-key routing trace */
+        const char *n = ibus_keyval_name(keyval);
+        fprintf(stderr, "[key] %s state=0x%X -> %s\n", n ? n : "?", state,
+                super ? "passthrough (Super)" : "forward");
+    }
+    if (super)
+        return FALSE;                          /* Super combo: let the compositor have it */
     ibus_engine_forward_key_event(engine, keyval, keycode, state);
     return TRUE;
 }
