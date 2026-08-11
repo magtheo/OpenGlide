@@ -105,14 +105,12 @@ settles the layout, resize, and visibility model. Ordered work:
    Still to do here: tray entry, a settings UI for §13.6, and the §13.3 question
    (the chord isn't suppressed, so the app underneath still sees left+right —
    live with it before building an interception layer).
-4. **Aspect-ratio band** — first sweep (2026-08-11) showed **no cliff**, top-1
-   flat at the 94% baseline from 10:5 to 10:1.8, so **resizing stays unclamped**.
-   But that run used the `line` model, which is structurally blind to trailing
-   overshoot — the one mechanism RESULTS.md shows corrupts decode — so a flat
-   result was close to guaranteed. The key-centre-polyline model is now built and
-   is the default (`--model word`); it amplifies overshoot 1.56× at k=1.67 where
-   the old one left it at 1.00×. **Re-run `--sweep`** to find out whether "no
-   cliff" survives a model that can actually see the failure.
+4. **Aspect-ratio band** — re-run 2026-08-11 with the fixed `--model word` (the
+   first "no cliff" result used the line model, which is blind to trailing
+   overshoot). There **is** a cliff, at the tall end: top-1 drops to **83% at
+   10:5 (k=0.60)** and holds 94% from 10:4 through 10:1.8 (wide). **Clamp the
+   tall end** so the board can't get taller than ~10:4 (aspect ≥ ~2.5); the wide
+   direction stays free. (ADR-0006 §F4; RESULTS.md.)
 5. ~~**Recent-word history** (§9.3)~~ ✅ — and it cost no layout. The four chrome
    slots are contextual: right after a glide they show that word's candidates
    (as before), and once those go stale they become the **recent words**, each
@@ -139,6 +137,18 @@ settles the layout, resize, and visibility model. Ordered work:
 7. **Remaining**: snap-to-edge / docked mode (§7.4); tray entry + a settings UI
    for §13.6; and the §13.3 question — the chord isn't suppressed, so the app
    underneath still sees left+right. Live with it before building interception.
+
+8. **Decode accuracy — the make-or-break** (ADR-0006, current focus). Real glides
+   underperform the controlled corpus (94%): a 24-glide live capture missed
+   `coffee→code`, `because→bose`, `mouse→mousse`. Misses split into **rerank-able**
+   (right word was a candidate — `mouse`) and **decode-depth** (right word absent —
+   `coffee`, `because`). Strategy, depth before re-ranking: **(a) decode depth**
+   — wider effective beam, multi-double-letter handling (`coffee` needs ff **and**
+   ee), messy-greedy recovery; **(b) n-gram context rescoring** — the whole-text
+   correction idea, re-ranks the top-K by the previous 1–2 words (n-gram, not
+   neural — viable on the T460s; conservative, to avoid the frequency-prior trap).
+   Both ship as **probes** measured on a fresh ≥30-real-glide corpus before they
+   touch the product decoder.
 
 > ⚠️ Steps 0–2 are **built and tested on hardware** (magtheo, 2026-08-11) — plus a
 > follow-up fix there: `og_ibus_backspace` was blocking the UI thread up to 500 ms

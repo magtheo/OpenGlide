@@ -19,6 +19,7 @@ verified choice here; put an open executable question in `tools/*-probe/`.
 | 0003   | Async contracts: swipe identity, single-owner output, latency      | Accepted  |
 | 0004   | Diagnostics and operations policy                                  | Accepted  |
 | 0005   | One grid unit drives the surface; the window collapses, never quits | Accepted* |
+| 0006   | Decode accuracy is layered — depth first, then context rescoring     | Proposed  |
 
 \* 0001 and 0005 carry verification gates that must close before public release
 (0005's remaining gates need real hardware: a build, the aspect-band corpus

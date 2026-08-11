@@ -168,7 +168,7 @@ Mechanism findings:
 ## Personalization — learn the user's words ✅
 `swipe_engine` keeps per-user word counts at `~/.local/share/openglide/user_freq.tsv` (loaded at startup). `decode` snapshots them under a mutex (`bump` runs on the UI thread) and adds `user_lambda·log(count+1)` (λ=2.0) before ranking — so words the user actually uses win ties over time. This is the right "learn common words": it learns the USER's vocabulary, sidestepping the help>hello problem that killed the generic frequency prior (the user teaches it "hello" by using/correcting it). Bumped on every glide commit + candidate correction (`decoder.bumpWord`); `bump()` saves immediately because SIGTERM/crash skips the dtor (so shutdown-only save would lose everything). Verified: persistence test (bump hello×2/world/good → file has `hello 2, world 1, good 1`); corpus still 94% (empty user_freq → no-op).
 
-## Letter-block aspect ratio — free resize is safe across the tested band ✅
+## Letter-block aspect ratio — cliff at the tall end (re-run with the fixed model) ⚠️
 ADR-0005 made `u` (column) and `rowH` (row) independent so the window fills any
 shape, which unpinned the letter block from the 10:3 it was captured at. Run:
 `corpus_test … --sweep` (re-projects `corpus-controlled.jsonl`, 18 glides).
@@ -190,8 +190,8 @@ baseline — at every aspect from 10:5 (tall) to 10:1.8 (wide), i.e. k = 0.60 �
 The single miss is the same word at every aspect — the known too-short stroke, a
 dictionary/stroke issue, not a shape one.
 
-**Decision: resizing stays unclamped** (ADR-0005 §3). Nothing here justifies
-restricting it.
+**Decision (line model — SUPERSEDED): resizing stays unclamped.** Re-run with the
+fixed word model found a cliff; see below.
 
 **⚠️ This run used the `line` model, which cannot see the dangerous case.**
 `--model line` scales the residual from a *locally straight* path, and trailing
@@ -212,9 +212,71 @@ that polyline, so it registers as deviation and does scale. Verified in
 If it stays flat, the "no cliff" conclusion is real; if it does not, the resize
 band needs clamping after all.
 
+**Re-run 2026-08-11 with `--model word` (now the default): there IS a cliff, at the
+tall end.** Top-1 drops to **15/18 (83%) at 10:5.0 (k=0.60)** — the fixed model
+sees the trailing-overshoot amplification the line model was blind to — and holds
+**17/18 (94%) from 10:4.0 through 10:1.8 (wide)**.
+
+| letter block | k | top-1 (`word`) | top-1 (`line`, blind) |
+|---|---|---|---|
+| 10:5.0 (tall) | 0.60 | **15 (83%)** | 17 (94%) |
+| 10:4.0 | 0.75 | 17 (94%) | 17 (94%) |
+| 10:3.0 (ref) | 1.00 | 17 (94%) | 17 (94%) |
+| 10:1.8 (wide) | 1.67 | 17 (94%) | 17 (94%) |
+
+**Corrected decision: clamp the tall end.** The board must not get taller than
+~**10:4** (aspect ≥ ~2.5); the wide direction stays free (robust to 10:1.8).
+See ADR-0006 §F4.
+
 Remaining caveats either way: both models assume perfect re-aiming at the new key
 centres and unchanged speed, and the corpus is 18 glides from one writer. Real
 glides captured at 10:1.8 and 10:5 are what actually closes this.
+
+## Decode accuracy — data-drive baseline (2026-08-11) 🟡
+
+ADR-0006. The decoder was only ever scored on a controlled corpus; this measures
+real input.
+
+- **Controlled corpus** (`corpus-controlled.jsonl`, 18): top-1 **94% (17/18)**.
+  Strong recovery from messy greedy (`cpmpurer→computer`, `helo→hello`); the one
+  miss (`window`) was a truncated stroke, not decode.
+- **`corpus.jsonl` (26) is unreliable** — entries #2–6 (computer/party/glide/
+  open/plant) all decode to `river`; 600–770 points each but identical start/end
+  ~(0.35,0.17) → duplicated/mislabelled glides. Do not cite its 77%.
+- **Real glides (24, live capture):** clearly below 94%. Doubles held
+  (`god→good`, `helo→hello`), long words recovered from moderate mess
+  (`compiet→computer`, `keybiard→keyboard`). Misses: `coffee→code` ×3,
+  `because→bose` ×3, `mouse→mousse` ×2.
+
+**Failure taxonomy (the strategy hinges on this):**
+- **Rerank-able** — right word was a candidate, just not #1 (`mouse→mousse`,
+  mouse was 2nd). A context re-ranker fixes these.
+- **Decode-depth** — right word *absent* from top-5 (`coffee`, `because` on the
+  misses). No re-ranker can recover a buried word; needs decode/scoring work.
+
+→ ADR-0006: **decode depth first, then n-gram context rescoring** (the user's
+whole-text idea), both as probes. A standing real-glide number is not yet
+reported — needs a ≥30-word fresh corpus (the existing ones are too small/corrupt).
+
+## Committed-text deletion is not viable on GNOME Wayland via IBus (2026-08-11) ❌
+
+`ibus_engine_delete_surrounding_text` **SIGABRTs gnome-shell**
+(`org.gnome.Shell@wayland: status=6/ABRT`, core-dump) — reproduced on backspace
+3×; each crash took down the whole session ("locked out, all apps crashed"). No
+OOM, no fault in our process — the shell died.
+
+The NULL-surrounding-text hypothesis was **disproved**: declaring interest at
+enable + gating on `set_surrounding_text` still crashed (a glide commit triggers
+`set_surrounding_text`, so the gate let the delete through → crash). It is a
+deeper gnome-shell Wayland-IM bug.
+
+All three IBus deletion paths are dead here: `delete_surrounding_text` (crashes),
+`forward_key_event(BackSpace)` (clients don't apply it), and uinput (target-
+mismatched — hits the focused surface, not the IBus commit context, so
+inconsistent). **Backspace ships uinput-only** — non-crashing, works for the
+immediate glide-then-correct case, imprecise otherwise. Durable fix is a preedit
+model (current word stays uncommitted, so correcting it needs no deletion) —
+deferred; see ADR-0006 consequences.
 
 ## How to run on another session
 ```
