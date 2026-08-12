@@ -4,7 +4,10 @@
 #include <csignal>
 #include <cstdio>
 #include <execinfo.h>
-#include <unistd.h>
+#include <QQuickWindow>
+#include <QSocketNotifier>
+#include <sys/socket.h>
+#include "pointerspeed.h"
 #include "swipesurface.h"
 #include "decoderbridge.h"
 #include "injector.h"
@@ -32,6 +35,10 @@ int main(int argc, char *argv[]) {
     DecoderBridge decoder;
     Injector injector;
     AppSettings settings;
+    PointerSpeed pointerSpeed;
+    pointerSpeed.setLevel(settings.value("pointer/level", 2).toInt());
+    pointerSpeed.restoreIfInterrupted();
+
 
     // Global show/hide trigger (spec §13). Mode + timing come from settings so
     // §13.6 is configurable; if /dev/input isn't readable it stays unavailable
@@ -47,8 +54,33 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("injector", &injector);
     engine.rootContext()->setContextProperty("settings", &settings);
     engine.rootContext()->setContextProperty("toggleListener", &toggle);
+    engine.rootContext()->setContextProperty("pointerSpeed", &pointerSpeed);
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
     if (engine.rootObjects().isEmpty())
         return -1;
+
+    // SIGTERM/SIGINT → clean quit so the destructors run and restore BOTH the
+    // user's IBus engine (Injector::~Injector) and their pointer speeds
+    // (PointerSpeed::~PointerSpeed). A raw kill skips this; the pointer-speed
+    // case is additionally recovered by restoreIfInterrupted() next launch.
+    static int sigFd[2] = {-1, -1};
+    ::socketpair(AF_UNIX, SOCK_STREAM, 0, sigFd);
+    auto *sn = new QSocketNotifier(sigFd[1], QSocketNotifier::Read, &app);
+    QObject::connect(sn, &QSocketNotifier::activated, &app, []() {
+        char a = 0; ::read(sigFd[1], &a, sizeof(a));
+        QCoreApplication::quit();
+    });
+    auto termHandler = [](int) { char a = 1; ::write(sigFd[0], &a, sizeof(a)); };
+    ::signal(SIGTERM, termHandler);
+    ::signal(SIGINT, termHandler);
+
+    // Slow the real pointer while it is over the keyboard window. Wayland clients
+    // can't query the global cursor position (QCursor::pos() is unreliable), so we
+    // drive this off the window's Enter/Leave crossing events — the compositor
+    // sends them reliably as the pointer crosses the surface. enter()/leave() are
+    // idempotent, and a surface born under the cursor also receives an Enter.
+    if (auto *window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()))
+        window->installEventFilter(&pointerSpeed);
+
     return app.exec();
 }

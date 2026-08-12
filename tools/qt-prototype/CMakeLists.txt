@@ -10,6 +10,7 @@ qt_standard_project_setup()
 # ---- IBus (GNOME UTF-8 commit path, ADR-0002) ----
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(IBUS REQUIRED ibus-1.0)
+pkg_check_modules(GIO REQUIRED gio-2.0)
 
 # ---- native FUTO decoder: build ExecuTorch (XNNPACK — the .pte is delegated) ----
 set(EXECUTORCH_BUILD_XNNPACK          ON CACHE BOOL "" FORCE)
@@ -34,10 +35,11 @@ qt_add_executable(openglide-qt
     src/injector.cpp src/injector.h
     src/appsettings.cpp src/appsettings.h
     src/togglelistener.cpp src/togglelistener.h
+    src/pointerspeed.cpp src/pointerspeed.h
     src/ibus_engine.c src/ibus_engine.h
     ${SPIKE_DIR}/swipe_engine.cpp ${SPIKE_DIR}/swipe_engine.h
 )
 qt_add_resources(openglide-qt "qml" PREFIX "/" FILES main.qml)
 
-target_include_directories(openglide-qt PRIVATE ${SPIKE_DIR} ${IBUS_INCLUDE_DIRS})
-target_link_libraries(openglide-qt PRIVATE Qt6::Core Qt6::Gui Qt6::Quick ${ET_LIBS} ${IBUS_LIBRARIES})
+target_include_directories(openglide-qt PRIVATE ${SPIKE_DIR} ${IBUS_INCLUDE_DIRS} ${GIO_INCLUDE_DIRS})
+target_link_libraries(openglide-qt PRIVATE Qt6::Core Qt6::Gui Qt6::Quick ${ET_LIBS} ${IBUS_LIBRARIES} ${GIO_LIBRARIES})

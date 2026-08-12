@@ -910,6 +910,7 @@ Window {
                             ? win.caretRect.x + "," + win.caretRect.y + " ×" + win.caretReports
                             : "never reported")
                       + "   ·   ⌨ " + (win.injected.length ? win.injected.replace(/\s+$/, "") : "—")
+                      + "   ·   ptr L" + pointerSpeed.level
                 color: pal.committedText
                 font.pixelSize: Math.max(7, win.u * 0.20); font.family: "monospace"
             }
@@ -999,6 +1000,7 @@ Window {
                         {g: "Large  · 720×360",  act: "l"},
                         {g: "Hide completely",   act: "hide"},
                         {g: "Avoid the caret",   act: "caret"},
+                        {g: "Pointer slow",      act: "ptr"},
                         {g: "Diagnostics",       act: "diag"},
                         {g: "Quit OpenGlide",    act: "quit"}
                     ]
@@ -1017,6 +1019,8 @@ Window {
                                   : modelData.act === "hide" ? (toggleListener.available
                                         ? "Hide · " + win.toggleGesture() + " to return"
                                         : "Hide — needs /dev/input access")
+                                  : modelData.act === "ptr" ? "Pointer slow: "
+                                        + (pointerSpeed.level === 0 ? "off" : "L" + pointerSpeed.level)
                                   : modelData.g
                             font.pixelSize: Math.max(8, win.u * 0.21)
                             color: parent.disabled ? "#9aa0a6"
@@ -1038,6 +1042,13 @@ Window {
                                     win.menuOpen = false;
                                 }
                                 else if (modelData.act === "diag") { win.showDiagnostics = !win.showDiagnostics; win.menuOpen = false; }
+                                else if (modelData.act === "ptr") {
+                                    // Cycle slowdown 0→1→2→3→0; keep the menu open so the
+                                    // level is visible while the user dials it in.
+                                    pointerSpeed.level = (pointerSpeed.level + 1) % 4;
+                                    settings.setValue("pointer/level", pointerSpeed.level);
+                                    settings.sync();
+                                }
                                 else { win.persistGeometry(); Qt.quit(); }
                             }
                         }
