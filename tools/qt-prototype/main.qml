@@ -20,7 +20,7 @@ Window {
     width: 560; height: 280
     visible: true
     flags: Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus | Qt.FramelessWindowHint
-    color: pal.shell
+    color: hidden ? "transparent" : pal.shell
     minimumWidth:  collapsed ? 1 : 320
     minimumHeight: collapsed ? 1 : 170
 
@@ -67,6 +67,13 @@ Window {
     readonly property int puckH: Math.max(30, Math.round(expandedW * 0.075))
     property bool menuOpen: false
     property bool showDiagnostics: false
+    // "Hidden" keeps the surface MAPPED: GNOME Wayland won't let a client place
+    // its own toplevel, so unmapping (visible=false) makes Mutter re-place it on
+    // re-show and the keyboard loses its spot. Instead we render the mapped
+    // window invisible (opacity 0) and click-through (empty input region); Mutter
+    // never re-places it and the keyboard reappears exactly where it was.
+    property bool hidden: false
+    readonly property int transparentForInput: 0x00080000  // Qt::WindowTransparentForInput
 
     // ---- input state ----
     property string layer: "abc"        // "abc" | "sym"
@@ -187,7 +194,7 @@ Window {
     property int  caretReports: 0
 
     function checkCaret() {
-        if (!visible || collapsed) return;
+        if (hidden || collapsed) return;
         caretReports = injector.caretReports();
         if (caretReports <= 0) return;
         const c = injector.caretRect();
@@ -419,22 +426,31 @@ Window {
         if (collapsed) return;
         width = w; height = h; menuOpen = false;
     }
-    // Hidden (spec §13.5): no surface at all, process resident, the global evdev
-    // listener still watching. Only ever offered when that listener is actually
-    // running — hiding with no way back would be the same trap as a one-click
-    // quit, just slower to discover.
+    // Hidden (spec §13.5): the keyboard is gone from view but the Wayland surface
+    // stays MAPPED — invisible (opacity 0) and click-through (empty input region).
+    // Unmapping (visible=false) would make Mutter re-place it on re-show (see the
+    // `hidden` property above), losing the remembered spot. Only offered when the
+    // global evdev listener runs: hiding with no way back would be the same trap
+    // as a one-click quit, just slower to discover.
     function hideCompletely() {
         if (!toggleListener.available) return;
         menuOpen = false;
         persistGeometry();
-        visible = false;
+        hidden = true;
+        flags = flags | transparentForInput;   // empty input region → click-through
+        contentItem.visible = false;          // no content painted → transparent buffer (QWindow::opacity is a no-op on Qt Wayland)
+        pointerSpeed.leave();                   // lift slowdown over the ghost window
     }
     function unhide() {
-        visible = true;
+        if (hidden) {
+            hidden = false;
+            contentItem.visible = true;
+            flags = flags & ~transparentForInput;   // input region restored
+        }
         raise();
     }
     function toggleVisibility() {
-        if (!visible) unhide();
+        if (hidden) unhide();
         else if (toggleListener.available) hideCompletely();
         else collapse();     // no listener: collapse is the reversible option
     }

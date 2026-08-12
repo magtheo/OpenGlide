@@ -1,4 +1,5 @@
 #include <QGuiApplication>
+#include <QSurfaceFormat>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <csignal>
@@ -29,6 +30,14 @@ static void crash_handler(int sig) {
 int main(int argc, char *argv[]) {
     ::signal(SIGSEGV, crash_handler);
     ::signal(SIGABRT, crash_handler);
+    // Translucent window: when "hidden" the keyboard surface stays mapped (GNOME
+    // Wayland re-places an unmapped window) but is rendered fully transparent
+    // (color "transparent" + content hidden) and made click-through. That needs
+    // an alpha channel in the surface format; set it before the platform window
+    // integration is created. (QWindow::opacity is a no-op on Qt Wayland.)
+    QSurfaceFormat fmt = QSurfaceFormat::defaultFormat();
+    fmt.setAlphaBufferSize(8);
+    QSurfaceFormat::setDefaultFormat(fmt);
     QGuiApplication app(argc, argv);
     qmlRegisterType<SwipeSurface>("OpenGlide", 1, 0, "SwipeSurface");
 
