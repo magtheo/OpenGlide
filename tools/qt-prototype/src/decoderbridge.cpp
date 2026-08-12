@@ -46,6 +46,18 @@ static QString resolveFreq() {
     return {};
 }
 
+// Find the system dictionary (decode lexicon). Debian names it american-english;
+// Fedora names it words. First existing candidate wins; empty if none.
+static QString resolveDict() {
+    const QStringList candidates = {
+        "/usr/share/dict/american-english",
+        "/usr/share/dict/words",
+        "/usr/share/dict/british-english",
+    };
+    for (const QString &p : candidates) if (QFileInfo::exists(p)) return p;
+    return {};
+}
+
 // Per-user word counts (personalization) -> ~/.local/share/openglide/user_freq.tsv.
 static QString resolveUserFreq() {
     QDir d(QDir::homePath() + "/.local/share/openglide");
@@ -109,7 +121,7 @@ DecoderBridge::DecoderBridge(QObject *parent) : QObject(parent) {
     // Load synchronously (~0.1-0.3 s: model load is ~0.1 ms; dictionary load
     // dominates). Brief, at startup, before the window is interactive.
     m_eng = std::make_shared<SwipeEngine>(resolveModel().toStdString(),
-                                          "/usr/share/dict/american-english",
+                                          resolveDict().toStdString(),
                                           resolveFreq().toStdString(),
                                           resolveUserFreq().toStdString());
     m_ready = m_eng->ready();
