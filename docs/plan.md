@@ -26,7 +26,7 @@ Core technical assumptions are now **measured, not guessed**:
 | UTF-8 via IBus (GNOME) | ✅ **wired into prototype** — hosts a pass-through engine, self-activates; `og_ibus_commit` lands exact UTF-8 (verified `æøå 🫐`); uinput fallback | tools/qt-prototype/src/ibus_engine.c, RESULTS.md |
 | Licensing | ✅ preliminary GO (GPL-3.0-only lib + commercial-permissive weights) | ADR-0001 |
 | Decisions / contracts | ✅ ADR-0001..0004, versioned data-formats | decisions/, data-formats.md |
-| **Window / layout UX** | 🔨 **rebuilt, unverified** — u/v grid (glide surface 26.8% → 60%), wings filled, resizable, collapses instead of quitting. Written without a Qt/ExecuTorch box: lint + syntax clean, **never compiled or rendered** | ADR-0005 |
+| **Window / layout UX** | ✅ **compiled, rendered, hand-driven** (2026-08-14, Plasma 6 / XWayland, uinput path): glide → decode → old-word correction → ⌫-hold exercised live — no freeze, no reordering (`help te` sink ground truth). IBus path not connected on that box (session has no IM configured; see RESULTS.md) | ADR-0005 |
 
 ## How reality refined the spec's §28 phases
 
@@ -134,9 +134,7 @@ settles the layout, resize, and visibility model. Ordered work:
    screen. Toggle in ⋯, persisted. Many toolkits never report; then it is a
    no-op, which is why it ships on. The diagnostics overlay shows the live rect
    and a report count, so the app is its own probe for the ADR-0005 gate.
-7. **Remaining**: snap-to-edge / docked mode (§7.4); tray entry + a settings UI
-   for §13.6; and the §13.3 question — the chord isn't suppressed, so the app
-   underneath still sees left+right. Live with it before building interception.
+7. **Remaining**: snap-to-edge / docked mode (§7.4); tray entry + a settings UI for §13.6; the §13.3 question — the chord isn't suppressed, so the app underneath still sees left+right (live with it before building interception); and a **hardware pass on chip safety** (6425926: target-generation stamping + age caps + stale-edit refusals — logic suite is 85 assertions but needs `node`, absent on the KDE box).
 
 8. **Decode accuracy — the make-or-break** (ADR-0006, current focus). Real glides
    underperform the controlled corpus (94%): a 24-glide live capture missed
@@ -168,7 +166,12 @@ settles the layout, resize, and visibility model. Ordered work:
    caret-avoidance pattern again (measure what a GTK field / terminal / Electron
    actually declare before designing a preedit correction model). Preedit is the
    durable path out of the deletion wall (current word stays uncommitted →
-   correcting it needs no deletion); the readout decides whether it's worth an ADR.
+
+   **Verified on hardware (2026-08-14, KDE/XWayland, uinput path):** the smoke
+   test is closed — old-history-word correction (delete word + suffix, retype)
+   and a 2 s ⌫-hold produced **no freeze and no ordering inversion**; exact
+   landed text captured through a `cat > file` sink (`help te`). See RESULTS.md
+   (KDE section).
 
 > ⚠️ Steps 0–2 are **built and tested on hardware** (magtheo, 2026-08-11) — plus a
 > follow-up fix there: `og_ibus_backspace` was blocking the UI thread up to 500 ms
@@ -180,8 +183,12 @@ settles the layout, resize, and visibility model. Ordered work:
 > and every piece of non-trivial logic is unit-tested standalone — the chord state
 > machine (13 cases incl. "ordinary clicking never fires" and "a long glide then a
 > right-click never fires"), the aspect re-projection (5 cases), and the history
-> text model (41 assertions, `tools/qml-logic-test`). But **nothing new has been
-> compiled or rendered.**
+> text model (41 assertions, `tools/qml-logic-test`). But **nothing new had been
+> compiled or rendered.** *Update 2026-08-14:* steps 3–5 are now **compiled,
+> rendered and exercised on hardware** (Plasma 6 / XWayland box): step 5's
+> recent-word chips and old-entry correction in particular (see item 9
+> verification + RESULTS.md). Still not exercised there: the chord/Hidden path
+> (step 3) and the aspect harness (step 4).
 
 Also Phase 2 per spec §28: ~~personalization~~ ✅, personal dictionary, SQLite,
 punctuation, settings UI.
@@ -192,8 +199,8 @@ Speech (whisper.cpp) → rich IME (Fcitx 5) → languages (Norwegian).
 ## Open prerequisites (need user authorization)
 - ~~Qt6 dev + QML modules~~ ✅ installed.
 - ~~`libibus-1.0-dev`~~ ✅ installed (IBus backend now buildable).
-- CMake ≥3.29 (bump or patch) + ExecuTorch build — native C++ decoder (4-core box, slow).
-- Sway / Hyprland / KDE sessions — remaining matrix rows (input-method-v2 + layer-shell).
+- ~~CMake ≥3.29 (bump or patch) + ExecuTorch build~~ ✅ built from source (executorch v1.4.0 + XNNPACK submodules, 16-core box; app links in ~73 s incremental after the first ET build).
+- Sway / Hyprland / KDE sessions — **KDE row measured** (2026-08-14, Plasma 6 / Fedora 44): the session has **no IM configured at all** (`QT_IM_MODULE`/`GTK_IM_MODULE` unset, `XMODIFIERS=@im=none`; the running ibus-daemon is unused) → app runs uinput-only, which works end-to-end. Next step is session config (Plasma's virtual-keyboard=IBus), not app debugging. Synthetic pointer injection is dead on Plasma 6 (XTEST no-op, uinput ABS/pen ignored, ydotoold device lacks EV_ABS) — manual testing there. RESULTS.md.
 
 ## Pointers
 - Vision: [openglide_technical_spec.md](openglide_technical_spec.md)

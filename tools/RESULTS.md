@@ -301,6 +301,67 @@ per focused client, plus the output-queue depth. Whether a preedit text model is
 worth building depends on what real apps declare — check a GTK field, a terminal
 and an Electron app before deciding.
 
+## KDE / Plasma 6 matrix row (2026-08-14, Fedora 44, second box) 🟡
+
+First hands-on on KDE: Plasma 6 Wayland, app forced to `QT_QPA_PLATFORM=xcb`
+per `run.sh`, 16-core laptop, uinput output path only.
+
+### Session IM state — no input method configured at all
+`[env] desktop=KDE session=wayland QT_IM_MODULE=(unset) GTK_IM_MODULE=(unset) XMODIFIERS=@im=none`
+(the `[env]` line was added in 6425926 for exactly this question). The running
+`ibus-daemon` is connected to nothing — so the app's in-process engine cannot
+bind (`not connected to ibus-daemon`) and this is **not an app bug**: the session
+never wired an IM. Path forward: Plasma System Settings → Keyboard → Virtual
+Keyboard → IBus, relogin, and only then does the bind failure become a real bug
+worth debugging. Fcitx5 backend (spec Phase 4) is the fallback architecture.
+
+### uinput fallback works end-to-end on KDE
+Glide → decode → commit landed in a focused konsole sink (`cat > /tmp/sink`):
+ground truth `help te` after a hello→help old-word correction plus a ⌫-hold.
+**Output-queue smoke test (3c6b226) PASSES on hardware**: old-word correction
+(delete word + suffix, retype) and a 2 s ⌫-hold — no freeze, no reordering.
+
+### Synthetic pointer injection is dead on Plasma 6 — test by hand
+Measured, in attempt order:
+- **XTEST FakeInput (pointer)**: extension present, events are a no-op — cursor
+  never moves. (Text injection via XTEST worked on the GNOME box; pointer does
+  not here.)
+- **uinput ABS pointer** (ABS_X/Y + BTN_LEFT): device creates, cursor never
+  moves — libinput does not support the generic absolute-pointer class.
+- **uinput tablet-pen** (BTN_TOOL_PEN + ABS): device creates, ignored by kwin.
+- **ydotool**: daemon running, but its device registers REL only (no EV_ABS) —
+  absolute moves silently do nothing. Relative events were observed on-device
+  but didn't move the cursor in the test window; abandoned as unreliable.
+- udev tags both virtual keyboards (`openglide-qt-injector`, ydotoold) with
+  `power-switch` (they register `KEY_POWER`); keyboard-event delivery works
+  regardless.
+Conclusion: automation on Plasma needs libei/portal work; manual driving is the
+reliable loop today.
+
+### Pointer slowdown is a no-op on KDE (and was a crash risk off-GNOME)
+It writes `org.gnome.desktop.peripherals.*`; no gnome-settings-daemon on KDE and
+kwin does not read them. Now schema-gated and default-off (6425926) — which also
+fixes the latent abort: `g_settings_new()` kills the process when the schema is
+absent, so the old default (level 2) hard-crashed any schema-less box on first
+window hover.
+
+### Real-glide latency + accuracy (anecdotal; ADR-0006 territory)
+Clean strokes decode in 20–60 ms; sloppy/long strokes hit 300–480 ms
+(`hwlo`/`helo`/`wltjf`/`testing` class) with one 1.7 s outlier (`tresitibg`).
+Accuracy under sloppy glides is mostly top-1 but re-glides happen (`cifr` ranked
+cir/cider above code until a cleaner pass). No decoder changes made on this box —
+this is the ADR-0006 corpus story, not a new signal.
+
+### Chip coherence (user-reported in the wild) — fixed by 6425926, hardware pass pending
+Stale words from an earlier target appeared in the chrome slots after switching
+targets mid-session; root cause: history validates against the app's mirror, and
+the uinput path has no focus signal. 6425926 stamps entries with a target
+generation (IBus `focus_in`/`focus_out` where available) plus age caps
+(`staleMs`: 20 s on the uinput fallback, 5 min with IBus); non-live entries
+leave the slots and all edit paths refuse stale entries. Logic suite: 85
+assertions (passing on the dev box; `node` absent on the KDE box — install to
+re-run locally).
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make
@@ -320,5 +381,5 @@ Record per cell: did the string land **exactly**? did focus stay on the target?
 
 ## Blocking follow-ups
 1. **IBus backend** (`libibus-dev`, sudo) to actually witness UTF-8 commit land in GNOME apps — the one unverified cell on this machine.
-2. **Sway / Hyprland / KDE sessions** to fill the remaining matrix rows (input-method-v2 + layer-shell).
+2. **Sway / Hyprland / KDE sessions** — KDE measured 2026-08-14 (see the KDE section above); Sway/Hyprland remain open (input-method-v2 + layer-shell).
 3. Qt6 dev install for the Qt UI wrapper (optional, later).
