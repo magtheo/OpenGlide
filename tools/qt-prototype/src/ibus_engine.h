@@ -35,6 +35,16 @@ bool og_ibus_commit(const char *utf8);
  * (queued) stay in submission order; see the comment on the definition. */
 bool og_ibus_commit_sync(const char *utf8, int timeout_ms);
 
+/* Changes whenever the text target may have changed — focus_out, focus_in, or the
+ * engine being disabled. Correction offsets computed against one generation must
+ * never be applied under another: the mirror they index would still look valid
+ * while pointing at a different document. Returns a counter, not a flag, because
+ * returning to a field cannot be distinguished from arriving at a new one. */
+int og_ibus_target_generation(void);
+
+/* An input context currently holds focus (i.e. commits have somewhere to land). */
+bool og_ibus_focused(void);
+
 /* Raw capability bitmask last declared by the focused client, or -1 if none ever
  * did. IBUS_CAP_PREEDIT_TEXT is the interesting bit. */
 int og_ibus_capabilities(void);

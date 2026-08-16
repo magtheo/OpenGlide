@@ -73,8 +73,9 @@ target app (spec §17) — confirmed on XWayland.
   It prints every key you press to stderr and announces itself loudly — it is a
   keystroke log, so it is per-session, never persisted, never on by default
   (ADR-0004 amendment).
-- **⌫**: tap = delete the last **word** (undoable — an "↶ word" chip appears in
-  the chrome for 8 s and restores the word *and* its alternatives); hold = one
+- **⌫**: tap = delete the last **word** (undoable — an "↶ undo word" chip appears in
+  the chrome for 8 s — labelled as an action, since a bare "↶ word" read as a
+  strange suggestion and restores the word *and* its alternatives); hold = one
   char immediately, then repeat every 70 ms; hold+swipe-left = multi-word delete
   with the dot gauge; swipe-right = undo within that gesture.
 - **Output is serialized** (`src/injector.{h,cpp}`): commit / commitExact /
@@ -91,6 +92,16 @@ target app (spec §17) — confirmed on XWayland.
   answers whether a preedit model (current word left uncommitted, so correcting it
   needs no deletion) is viable in the apps you actually use, before anything is
   built on it. Deletion is the broken primitive underneath every correction path.
+- **Pointer slowdown is OFF by default** and gated on the GNOME peripherals
+  gsettings schemas actually existing. `g_settings_new()` *aborts the process* on
+  a missing schema rather than failing, so off GNOME the old default (level 2)
+  would kill the app the moment the cursor entered the window; it now reports
+  unavailable in ⋯ instead. It also writes a **global** desktop setting on window
+  hover, which is not something to opt someone into silently. A crash re-raises
+  without running destructors, so `crash_handler` calls
+  `og_pointer_emergency_restore()` — async-signal-safe by construction: the argv
+  strings are rendered at apply() time and the handler only `fork()`s and
+  `execve()`s. `restoreIfInterrupted()` remains the next-launch backstop.
 - **Caret avoidance**: the focused app reports its text-cursor rect through the
   IBus `set_cursor_location` vfunc. An IME normally uses that to put a popup
   *next to* the caret; OpenGlide uses it to get *off* the text — if the window
@@ -98,13 +109,27 @@ target app (spec §17) — confirmed on XWayland.
   glide, always on screen. Toggle in ⋯ (persisted). Many toolkits never report it,
   in which case this does nothing — the diagnostics line shows `caret: x,y ×N` or
   "never reported", so you can see which.
+- **Target identity — corrections never edit a document we no longer own.** Every
+  correction is "delete N chars, retype" against offsets into `injected`, our
+  mirror of the focused field. If focus moves to a *different* field those offsets
+  still validate (the mirror didn't change) but now address the wrong document, so
+  a stale chip click would silently edit whatever the user switched to;
+  `trimHistory()` cannot see this, it only catches drift *within* a focused field.
+  Two layers: (1) `targetGeneration()` — IBus `focus_in`/`focus_out`/`disable`,
+  exact but only while OpenGlide is the active IME; (2) an age cap, all that's
+  available on the uinput fallback (KDE/Fcitx gives no IME focus signal), so it is
+  much shorter there — 20 s vs 5 min. Entries are stamped with their generation;
+  non-live entries are removed from the chip slots and every mutator
+  (`replaceHistory` / `deleteHistory` / `correct` / `undoDelete`) **refuses**
+  rather than editing blind. Diagnostics shows `target gen N (focused|no focus)`.
 - **Recent-word history (spec §9.3)**: the four chrome slots are contextual —
   candidates right after a glide, the recent words once those go stale. Each
   history word keeps the candidate list its own glide produced, so clicking it
   offers those alternatives + Delete. Correction is no longer limited to the
   newest word. Entries hold absolute offsets into the `injected` mirror; a
   replacement shifts every later entry, and any manual edit drops entries that no
-  longer match. Unit-tested in `../qml-logic-test` (69 assertions, no Qt needed).
+  longer match. Unit-tested in `../qml-logic-test` (85 assertions, no Qt needed) — including
+  that each refusal issues *no injector output at all*, not merely unchanged text.
 - **Show/hide (spec §13)**: three states — Full, Collapsed (the puck), and Hidden
   (no surface at all). Hidden is reached from ⋯ and returns via `ToggleListener`
   (`src/togglelistener.{h,cpp}`), a worker thread watching raw evdev mouse buttons

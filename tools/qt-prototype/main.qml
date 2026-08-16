@@ -95,6 +95,42 @@ Window {
     readonly property int histMax: 12
     property string pendingUndo: ""      // word removed by a ⌫ tap, restorable
     property var    pendingUndoEntry: null
+    property int    undoGen: -1          // target the staged undo belongs to
+
+    // ---- target identity: never edit a document we no longer own ------------
+    // Corrections are "delete N chars, retype" against offsets into `injected`,
+    // our mirror of the focused field. If focus moves to a DIFFERENT field the
+    // offsets still validate — the mirror didn't change — but they now address
+    // the wrong document, so clicking a stale chip would silently edit whatever
+    // the user switched to. trimHistory() cannot catch this: it only detects
+    // drift WITHIN a still-focused field.
+    //
+    // Two layers, because the precise signal is not always available:
+    //  1. targetGen — IBus focus_in/focus_out/disable. Exact, but only while
+    //     OpenGlide is the active IME (i.e. GNOME/IBus).
+    //  2. staleMs — an age cap, which is all we have on the uinput fallback
+    //     (KDE/Fcitx, no IME focus signal at all). Deliberately much shorter
+    //     there: with no way to know the target changed, old is the only proxy.
+    property int  targetGen: 0
+    readonly property int staleMs: ibusActive ? 300000 : 20000
+    function entryLive(e) {
+        return e !== null && e !== undefined
+            && e.gen === targetGen
+            && (Date.now() - e.t) < staleMs;
+    }
+    Timer {
+        interval: 400; repeat: true
+        running: win.visible && !win.collapsed && !win.hidden
+        onTriggered: {
+            const g = injector.targetGeneration();
+            if (g !== win.targetGen) {
+                win.targetGen = g;      // focus moved: every prior entry is now stale
+                win.candidates = [];    // and so are the candidates for the last glide
+                win.histOpen = -1;
+                win.clearUndo();
+            }
+        }
+    }
 
     // What the chrome slots show. Right after a glide those slots ARE the
     // alternatives for the word just committed, so candidates take priority;
@@ -102,19 +138,24 @@ Window {
     // slots become the recent words, each still carrying its own alternatives.
     // Contextual, so history costs no permanent rows and the glide surface stays
     // at 60% (ADR-0005 §1).
-    readonly property bool showingHistory: candidates.length === 0 && history.length > 0
+    readonly property bool showingHistory: candidates.length === 0 && chromeSlots.length > 0
     readonly property var chromeSlots: {
         var a = [];
         if (pendingUndo.length)      // an undo offer outranks both
-            a.push({text: "↶ " + pendingUndo.replace(/\s+$/, ""), hist: false, undo: true, idx: -1});
+            a.push({text: "↶ undo " + pendingUndo.replace(/\s+$/, ""), hist: false, undo: true, idx: -1});
         const room = 4 - a.length;
         if (candidates.length > 0) {
             for (var i = 0; i < Math.min(room, candidates.length); i++)
                 a.push({text: candidates[i].text, hist: false, undo: false, idx: i});
             return a;
         }
-        for (var j = Math.max(0, history.length - room); j < history.length; j++)
-            a.push({text: history[j].text, hist: true, undo: false, idx: j});
+        // Only entries we can still prove belong to the current target are
+        // offered — a chip you cannot safely act on must not be clickable.
+        var live = [];
+        for (var j = 0; j < history.length; j++)
+            if (entryLive(history[j])) live.push(j);
+        for (var k = Math.max(0, live.length - room); k < live.length; k++)
+            a.push({text: history[live[k]].text, hist: true, undo: false, idx: live[k]});
         return a;
     }
     property bool   decoderDead: false
@@ -256,7 +297,8 @@ Window {
     // ================= recent-word history (spec §9.3) =================
     function pushHistory(text, cands, start) {
         var h = history.slice();
-        h.push({text: text, cands: cands, start: start, len: text.length});
+        h.push({text: text, cands: cands, start: start, len: text.length,
+                gen: targetGen, t: Date.now()});   // which target this belongs to
         while (h.length > histMax) h.shift();
         history = h;
     }
@@ -278,6 +320,9 @@ Window {
     function replaceHistory(hi, newText) {
         if (hi < 0 || hi >= history.length) return;
         const e = history[hi];
+        // Refuse rather than edit blind: this entry's offsets were computed against
+        // a target we may no longer be typing into.
+        if (!entryLive(e)) { histOpen = -1; return; }
         if (injected.substr(e.start, e.len) !== e.text) { trimHistory(); return; }
         if (newText === e.text) return;
         const suffix = injected.substring(e.start + e.len);
@@ -286,9 +331,11 @@ Window {
         injected = injected.substring(0, e.start) + newText + suffix;
         const delta = newText.length - e.len;
         var h = history.slice();
-        h[hi] = {text: newText, cands: e.cands, start: e.start, len: newText.length};
+        h[hi] = {text: newText, cands: e.cands, start: e.start, len: newText.length,
+                 gen: e.gen, t: e.t};
         for (var j = hi + 1; j < h.length; j++)
-            h[j] = {text: h[j].text, cands: h[j].cands, start: h[j].start + delta, len: h[j].len};
+            h[j] = {text: h[j].text, cands: h[j].cands, start: h[j].start + delta,
+                    len: h[j].len, gen: h[j].gen, t: h[j].t};
         history = h;
         histOpen = -1;
         decoder.bumpWord(newText.toLowerCase());   // the user chose this — boost it
@@ -296,6 +343,7 @@ Window {
     function deleteHistory(hi) {
         if (hi < 0 || hi >= history.length) return;
         const e = history[hi];
+        if (!entryLive(e)) { histOpen = -1; return; }
         if (injected.substr(e.start, e.len) !== e.text) { trimHistory(); return; }
         const extra = injected[e.start + e.len] === " " ? 1 : 0;   // swallow one space
         const suffix = injected.substring(e.start + e.len + extra);
@@ -306,7 +354,8 @@ Window {
         var h = history.slice();
         h.splice(hi, 1);
         for (var j = hi; j < h.length; j++)
-            h[j] = {text: h[j].text, cands: h[j].cands, start: h[j].start + delta, len: h[j].len};
+            h[j] = {text: h[j].text, cands: h[j].cands, start: h[j].start + delta,
+                    len: h[j].len, gen: h[j].gen, t: h[j].t};
         history = h;
         histOpen = -1;
         candidates = [];
@@ -365,11 +414,13 @@ Window {
         const s = deleteWord();
         if (!s.length) return;
         pendingUndoEntry = hBefore.length > history.length ? hBefore[hBefore.length - 1] : null;
+        undoGen = targetGen;
         pendingUndo = s;
         undoTimer.restart();
     }
     function undoDelete() {
         if (!pendingUndo.length) return;
+        if (undoGen !== targetGen) { clearUndo(); return; }   // different target now
         const start = injected.length;          // deleteWord() returns "word" + spaces
         injector.commitExact(pendingUndo);
         injected += pendingUndo;
@@ -378,7 +429,7 @@ Window {
         clearUndo();
     }
     function clearUndo() {
-        pendingUndo = ""; pendingUndoEntry = null;
+        pendingUndo = ""; pendingUndoEntry = null; undoGen = -1;
         undoTimer.stop();
     }
     Timer { id: undoTimer; interval: 8000; onTriggered: win.clearUndo() }
@@ -922,6 +973,7 @@ Window {
                       + "   ·   preedit: " + (win.clientCaps < 0 ? "no caps reported"
                             : (win.preeditSupported ? "YES" : "no") + " (caps 0x" + win.clientCaps.toString(16) + ")")
                       + "   ·   out queue: " + injector.pending()
+                      + "   ·   target gen " + win.targetGen + (injector.focused() ? " (focused)" : " (no focus)")
                       + "   ·   caret: " + (win.caretReports > 0
                             ? win.caretRect.x + "," + win.caretRect.y + " ×" + win.caretReports
                             : "never reported")
@@ -1021,7 +1073,9 @@ Window {
                         {g: "Quit OpenGlide",    act: "quit"}
                     ]
                     Rectangle {
-                        readonly property bool disabled: modelData.act === "hide" && !toggleListener.available
+                        readonly property bool disabled:
+                            (modelData.act === "hide" && !toggleListener.available)
+                            || (modelData.act === "ptr" && !pointerSpeed.available)
                         width: parent.width; height: win.u * 0.62
                         color: mi.containsMouse && !disabled ? pal.candBar : "#ffffff"
                         Text {
@@ -1035,8 +1089,9 @@ Window {
                                   : modelData.act === "hide" ? (toggleListener.available
                                         ? "Hide · " + win.toggleGesture() + " to return"
                                         : "Hide — needs /dev/input access")
-                                  : modelData.act === "ptr" ? "Pointer slow: "
-                                        + (pointerSpeed.level === 0 ? "off" : "L" + pointerSpeed.level)
+                                  : modelData.act === "ptr" ? (pointerSpeed.available
+                                        ? "Pointer slow: " + (pointerSpeed.level === 0 ? "off" : "L" + pointerSpeed.level)
+                                        : "Pointer slow — needs GNOME settings")
                                   : modelData.g
                             font.pixelSize: Math.max(8, win.u * 0.21)
                             color: parent.disabled ? "#9aa0a6"

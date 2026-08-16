@@ -10,7 +10,7 @@ import re, sys
 WANT = {"pushHistory", "trimHistory", "replaceHistory", "deleteHistory", "correct",
         "commitDecoded", "deleteChar", "deleteWord", "tapPunct", "tapSpace",
         "typeKey", "consumeShift", "shifted", "tapDeleteWord", "undoDelete",
-        "clearUndo", "undoWord"}
+        "clearUndo", "undoWord", "entryLive"}
 
 def strip_comment(line):
     q = line.find('//')

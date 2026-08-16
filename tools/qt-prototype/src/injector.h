@@ -32,6 +32,10 @@ public:
     Q_INVOKABLE int  capabilities() const;
     // Output ops still queued. 0 = the target field has caught up with the mirror.
     Q_INVOKABLE int  pending() const;
+    // Changes whenever the text target may have changed (focus moved). Correction
+    // offsets are only valid within one generation — see ibus_engine.h.
+    Q_INVOKABLE int  targetGeneration() const;
+    Q_INVOKABLE bool focused() const;
     // Where the focused app says its text cursor is, in screen pixels — used to
     // keep the keyboard off the text being typed. Empty rect if no client has
     // ever reported one (many toolkits never do).

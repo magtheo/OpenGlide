@@ -199,6 +199,8 @@ QRect Injector::caretRect() const {
 
 int Injector::caretReports() const { return int(og_ibus_cursor_reports()); }
 bool Injector::preeditSupported() const { return og_ibus_preedit_supported(); }
+int  Injector::targetGeneration() const { return og_ibus_target_generation(); }
+bool Injector::focused() const { return og_ibus_focused(); }
 int  Injector::capabilities() const { return og_ibus_capabilities(); }
 void Injector::backspace(int n) {
     if (n <= 0) return;

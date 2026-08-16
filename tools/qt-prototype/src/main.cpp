@@ -17,6 +17,11 @@
 
 // Dump a backtrace on crash so we can localize faults in the IBus/GLib path.
 static void crash_handler(int sig) {
+    // Give the user their pointer speed back before we die. This re-raises with
+    // SIG_DFL, so no destructor runs — without this the system mouse stays slowed
+    // until the next launch recovers it, with nothing on screen to explain why.
+    // Safe here: it only forks and execs pre-rendered arguments.
+    og_pointer_emergency_restore();
     void* frames[64];
     int n = backtrace(frames, 64);
     char buf[128];
@@ -45,9 +50,26 @@ int main(int argc, char *argv[]) {
     Injector injector;
     AppSettings settings;
     PointerSpeed pointerSpeed;
-    pointerSpeed.setLevel(settings.value("pointer/level", 2).toInt());
+    pointerSpeed.setLevel(settings.value("pointer/level", 0).toInt());   // opt-in, not opt-out
     pointerSpeed.restoreIfInterrupted();
 
+
+    // Which input-method framework is this desktop actually using? On GNOME it is
+    // IBus (ADR-0002's verified path); KDE normally uses Fcitx5, in which case our
+    // in-process IBus engine will never bind no matter what we fix, and text falls
+    // back to layout-bound uinput. Log it once so that question is answerable from
+    // a run log instead of guesswork.
+    {
+        const auto env = [](const char *k) {
+            const QByteArray v = qgetenv(k);
+            return v.isEmpty() ? QByteArrayLiteral("(unset)") : v;
+        };
+        std::fprintf(stderr,
+            "[env] desktop=%s session=%s QT_IM_MODULE=%s GTK_IM_MODULE=%s XMODIFIERS=%s\n",
+            env("XDG_CURRENT_DESKTOP").constData(), env("XDG_SESSION_TYPE").constData(),
+            env("QT_IM_MODULE").constData(), env("GTK_IM_MODULE").constData(),
+            env("XMODIFIERS").constData());
+    }
 
     // Global show/hide trigger (spec §13). Mode + timing come from settings so
     // §13.6 is configurable; if /dev/input isn't readable it stays unavailable
@@ -79,7 +101,7 @@ int main(int argc, char *argv[]) {
         char a = 0; ::read(sigFd[1], &a, sizeof(a));
         QCoreApplication::quit();
     });
-    auto termHandler = [](int) { char a = 1; ::write(sigFd[0], &a, sizeof(a)); };
+    auto termHandler = [](int) { char a = 1; ssize_t r = ::write(sigFd[0], &a, sizeof(a)); (void)r; };
     ::signal(SIGTERM, termHandler);
     ::signal(SIGINT, termHandler);
 

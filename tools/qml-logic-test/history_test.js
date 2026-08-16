@@ -16,7 +16,8 @@ const decoder = { bumpWord: () => {} };
 function makeWin() {
   const state = {
     injected: '', candidates: [], history: [], histOpen: -1, histMax: 12, shiftState: 0,
-    pendingUndo: '', pendingUndoEntry: null,
+    pendingUndo: '', pendingUndoEntry: null, undoGen: -1,
+    targetGen: 0, staleMs: 300000,             // IBus present unless a test says otherwise
     undoTimer: { restart(){}, stop(){} },      // QML Timer stub
   };
   const build = new Function('state', 'injector', 'decoder', `
@@ -24,7 +25,8 @@ function makeWin() {
       ${extracted}
       return { pushHistory, trimHistory, replaceHistory, deleteHistory, correct,
                commitDecoded, deleteChar, deleteWord, tapPunct, tapSpace, typeKey,
-               consumeShift, shifted, tapDeleteWord, undoDelete, clearUndo, undoWord };
+               consumeShift, shifted, tapDeleteWord, undoDelete, clearUndo, undoWord,
+               entryLive };
     }`);
   return { state, fn: build(state, injector, decoder) };
 }
@@ -211,6 +213,62 @@ console.log('history: offsets, replacement, deletion, mirror/target sync\n');
   w.fn.undoDelete();
   check('  undo still restores the text', w.state.injected === 'hi ');
   checkSync(w, 'after undoing a non-history word');
+}
+
+{ // === target identity: never edit a document we no longer own ===============
+  target = ''; const w = makeWin();
+  glide(w, 'there', ['three']);
+  glide(w, 'stone', ['store']);
+  const textBefore = w.state.injected, bufBefore = target;
+  check('two words committed', w.state.injected === 'there stone ');
+
+  // focus moves to a different field -> the offsets now address someone else's
+  // document. Every correction path must refuse rather than edit blind.
+  w.state.targetGen = 1;
+
+  w.fn.replaceHistory(0, 'three');
+  check('replaceHistory REFUSES after focus change', w.state.injected === textBefore);
+  check('  and issued no output at all', target === bufBefore);
+
+  w.fn.deleteHistory(1);
+  check('deleteHistory REFUSES after focus change', w.state.injected === textBefore);
+  check('  and issued no output at all', target === bufBefore);
+
+  w.state.candidates = [{text:'stone'},{text:'store'}];
+  w.fn.correct(1);
+  check('candidate correct() REFUSES after focus change', w.state.injected === textBefore);
+  check('  and issued no output at all', target === bufBefore);
+
+  // a word glided into the NEW target is live again and fully correctable
+  glide(w, 'water', ['eater']);
+  check('new word under the new target commits', w.state.injected === 'there stone water ');
+  w.fn.replaceHistory(2, 'eater');
+  check('  and is correctable', w.state.injected === 'there stone eater ');
+  checkSync(w, 'after correcting under the new target');
+}
+
+{ // === age cap: the only guard available on the uinput fallback ==============
+  target = ''; const w = makeWin();
+  w.state.staleMs = 20000;                    // no IBus -> short window
+  glide(w, 'alpha', ['alpha2']);
+  check('fresh entry is live', w.fn.entryLive(w.state.history[0]) === true);
+  w.state.history[0].t -= 25000;              // pretend 25 s elapsed
+  check('  aged-out entry is not live', w.fn.entryLive(w.state.history[0]) === false);
+  const before = w.state.injected, buf = target;
+  w.fn.replaceHistory(0, 'alpha2');
+  check('  and correcting it REFUSES', w.state.injected === before && target === buf);
+}
+
+{ // === staged undo is target-scoped too ======================================
+  target = ''; const w = makeWin();
+  glide(w, 'alpha', []); glide(w, 'bravo', []);
+  w.fn.tapDeleteWord();
+  check('undo staged', w.state.pendingUndo === 'bravo ');
+  w.state.targetGen = 7;                      // focus moved before the user clicked undo
+  const before = w.state.injected, buf = target;
+  w.fn.undoDelete();
+  check('undo REFUSES into a different target', w.state.injected === before && target === buf);
+  check('  and the stale offer is cleared', w.state.pendingUndo === '');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

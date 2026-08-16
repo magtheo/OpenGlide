@@ -37,6 +37,8 @@ static gchar               *g_prev = NULL;          /* saved global engine name 
 static volatile IBusEngine *g_engine = NULL;        /* non-NULL => active + has a context */
 static volatile gint        g_connected = 0;
 static GThread           *g_ibus_thread_id = NULL;   /* for inline dispatch when already on the IBus thread */
+static volatile gint        g_target_gen = 0;        /* see og_ibus_target_generation */
+static volatile gint        g_focused = 0;
 /* Self-test (OPENGLIDE_IBUS_TEST=1) run from a SEPARATE thread — exercises the
  * cross-thread commit path (g_main_context_invoke) that the inline call at enable
  * does NOT, and which is what real glide commits use. Backspace is no longer
@@ -60,6 +62,8 @@ static void og_enable(IBusEngine *engine) {
 static void og_disable(IBusEngine *engine) {
     (void)engine;
     g_atomic_pointer_set(&g_engine, NULL);
+    g_atomic_int_inc(&g_target_gen);    /* the field we were editing is gone */
+    g_atomic_int_set(&g_focused, 0);
     fprintf(stderr, "[openglide-ibus] disabled\n");
 }
 /* ---- key routing policy -------------------------------------------------
@@ -140,6 +144,34 @@ static gboolean og_process_key_event(IBusEngine *engine, guint keyval, guint key
     ibus_engine_forward_key_event(engine, keyval, keycode, state);
     return TRUE;
 }
+/* ---- target identity ------------------------------------------------------
+ * Every correction the UI offers is "delete N characters, then retype", computed
+ * from offsets into a mirror of the focused field. If focus moves to a DIFFERENT
+ * field those offsets still look valid — the mirror did not change — but they now
+ * address the wrong document, so clicking a stale suggestion would silently edit
+ * whatever the user switched to.
+ *
+ * The input context tells us: focus_out when the field goes away, focus_in when a
+ * new one arrives. Publish a counter that changes on either, so the UI can stamp
+ * each history entry with the target it belongs to and refuse to act on entries
+ * from a previous one. Deliberately a generation counter, not a boolean: coming
+ * BACK to a field is a new generation too, because we cannot prove it is the same
+ * field. Fail safe, not fail convenient. */
+
+static void og_focus_in(IBusEngine *engine) {
+    (void)engine;
+    g_atomic_int_inc(&g_target_gen);
+    g_atomic_int_set(&g_focused, 1);
+}
+static void og_focus_out(IBusEngine *engine) {
+    (void)engine;
+    g_atomic_int_inc(&g_target_gen);
+    g_atomic_int_set(&g_focused, 0);
+}
+
+int  og_ibus_target_generation(void) { return (int)g_atomic_int_get(&g_target_gen); }
+bool og_ibus_focused(void) { return g_atomic_int_get(&g_focused) != 0; }
+
 /* ---- client capabilities -------------------------------------------------
  * The focused client declares what it can render. IBUS_CAP_PREEDIT_TEXT is the
  * one that matters here: preedit (keeping the current word UNCOMMITTED so editing
@@ -207,6 +239,8 @@ static void og_engine_class_init(OgEngineClass *klass) {
     IBUS_ENGINE_CLASS(klass)->process_key_event = og_process_key_event;
     IBUS_ENGINE_CLASS(klass)->set_cursor_location = og_set_cursor_location;
     IBUS_ENGINE_CLASS(klass)->set_capabilities    = og_set_capabilities;
+    IBUS_ENGINE_CLASS(klass)->focus_in            = og_focus_in;
+    IBUS_ENGINE_CLASS(klass)->focus_out           = og_focus_out;
 }
 
 static gpointer ibus_thread(gpointer arg) {
