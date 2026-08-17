@@ -4,7 +4,11 @@
 #include <QCoreApplication>
 #include <cstdio>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QTimer>
 #include <atomic>
@@ -42,6 +46,18 @@ static QString resolveFreq() {
     return {};
 }
 
+// Find the system dictionary (decode lexicon). Debian names it american-english;
+// Fedora names it words. First existing candidate wins; empty if none.
+static QString resolveDict() {
+    const QStringList candidates = {
+        "/usr/share/dict/american-english",
+        "/usr/share/dict/words",
+        "/usr/share/dict/british-english",
+    };
+    for (const QString &p : candidates) if (QFileInfo::exists(p)) return p;
+    return {};
+}
+
 // Per-user word counts (personalization) -> ~/.local/share/openglide/user_freq.tsv.
 static QString resolveUserFreq() {
     QDir d(QDir::homePath() + "/.local/share/openglide");
@@ -49,14 +65,84 @@ static QString resolveUserFreq() {
     return d.absoluteFilePath("user_freq.tsv");
 }
 
+// Find languages/<lang>/layout.json — the shared key geometry (ADR-0005 step 0).
+static QString resolveLayout() {
+    const QStringList candidates = {
+        QCoreApplication::applicationDirPath() + "/../../../languages/en/layout.json",
+        QCoreApplication::applicationDirPath() + "/../../languages/en/layout.json",
+        QDir::currentPath() + "/languages/en/layout.json",
+    };
+    for (const QString &p : candidates) if (QFileInfo::exists(p)) return p;
+    return {};
+}
+
+bool DecoderBridge::loadLayout(const QString &path) {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        std::fprintf(stderr, "[layout] %s: %s\n", qPrintable(path), qPrintable(err.errorString()));
+        return false;
+    }
+    const QJsonObject root = doc.object();
+    std::vector<KeyCenter> keys;
+    QVariantList forQml;
+    for (const QJsonValue &v : root.value("keys").toArray()) {
+        const QJsonObject k = v.toObject();
+        const QString label = k.value("label").toString();
+        if (label.size() != 1) continue;
+        const float x = float(k.value("x").toDouble());
+        const float y = float(k.value("y").toDouble());
+        keys.push_back({label.at(0).toLatin1(), x, y});
+        QVariantMap m;
+        m["l"] = label.toUpper();     // display glyph
+        m["c"] = label.toLower();     // what a tap types
+        m["x"] = x;
+        m["y"] = y;
+        forQml.append(m);
+    }
+    // Install into the engine FIRST — if it rejects the geometry (missing or
+    // duplicate letters), keep the built-in and do not hand QML a layout the
+    // decoder is not actually using.
+    if (!m_eng || !m_eng->set_layout(keys)) {
+        std::fprintf(stderr, "[layout] %s rejected (%zu keys) — using built-in QWERTY\n",
+                     qPrintable(path), keys.size());
+        return false;
+    }
+    m_keys = forQml;
+    m_layoutId = root.value("layout_id").toString(QStringLiteral("unknown"));
+    std::fprintf(stderr, "[layout] %s: %lld keys (%s)\n", qPrintable(path),
+                 (long long)forQml.size(), qPrintable(m_layoutId));
+    return true;
+}
+
 DecoderBridge::DecoderBridge(QObject *parent) : QObject(parent) {
     // Load synchronously (~0.1-0.3 s: model load is ~0.1 ms; dictionary load
     // dominates). Brief, at startup, before the window is interactive.
     m_eng = std::make_shared<SwipeEngine>(resolveModel().toStdString(),
-                                          "/usr/share/dict/american-english",
+                                          resolveDict().toStdString(),
                                           resolveFreq().toStdString(),
                                           resolveUserFreq().toStdString());
     m_ready = m_eng->ready();
+
+    // Key geometry: one file, both consumers (spec §7.2). If it can't be loaded
+    // the engine keeps its built-in QWERTY, and we hand QML that same geometry
+    // read back from the engine — so the two can never disagree.
+    const QString lp = resolveLayout();
+    if (lp.isEmpty() || !loadLayout(lp)) {
+        m_keys.clear();
+        for (const KeyCenter &k : m_eng->layout()) {
+            const QString c = QString(QChar::fromLatin1(k.label));
+            QVariantMap m;
+            m["l"] = c.toUpper();
+            m["c"] = c;
+            m["x"] = k.x;
+            m["y"] = k.y;
+            m_keys.append(m);
+        }
+    }
+
     // Defer the signal so QML (connected after construction) observes the state.
     QTimer::singleShot(0, this, [this] {
         emit readyChanged();

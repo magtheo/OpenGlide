@@ -42,14 +42,19 @@ void SwipeSurface::mouseReleaseEvent(QMouseEvent *event) {
     emit swipingChanged();
     ungrabMouse();
 
-    // Tap vs swipe: a tap stays on one key (small total displacement from the
-    // press point). Keys are ~0.1 apart normalized, so <0.05 means it never left
-    // the pressed key. Emit tapped instead of swipeCompleted in that case.
-    const float TAP_THRESH2 = 0.05f * 0.05f;
+    // Tap vs swipe: a tap stays on one key. Measure displacement in KEY WIDTHS,
+    // not in raw normalized units — those are anisotropic (keys are 1/cols apart
+    // in x but 1/rows apart in y, i.e. 0.1 vs 0.333 on QWERTY). Comparing dx and
+    // dy against one normalized threshold made it 0.50 of a key horizontally and
+    // 0.15 vertically, so a tap with slight downward drift was classified as a
+    // glide and decoded to garbage. Dividing each axis by its own key pitch makes
+    // the threshold mean the same thing in both directions.
+    const float TAP_THRESH2 = 0.35f * 0.35f;   // fraction of a key, squared
     float maxd2 = 0.0f;
     for (const P &p : m_pts) {
-        float dx = p.x - m_pts[0].x, dy = p.y - m_pts[0].y;
-        float d2 = dx * dx + dy * dy;
+        const float dx = (p.x - m_pts[0].x) * float(m_cols);   // -> key widths
+        const float dy = (p.y - m_pts[0].y) * float(m_rows);   // -> key heights
+        const float d2 = dx * dx + dy * dy;
         if (d2 > maxd2) maxd2 = d2;
     }
     if (maxd2 <= TAP_THRESH2) {

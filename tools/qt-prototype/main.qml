@@ -2,22 +2,43 @@ import QtQuick
 import QtQuick.Window
 import OpenGlide 1.0
 
+// OpenGlide keyboard surface — geometry per ADR-0005.
+//
+// ONE unit drives everything: u = contentWidth/10 (a column), rowH = a letter row.
+// Every element is a multiple of u horizontally and shares the letter block's
+// outer edges, so the action row is part of the same grid rather than a second
+// widget floating under it. The letter block spans the full content width — no
+// centering, no letterbox — and the 1.5u wings at each end of row 3 hold shift
+// and backspace instead of being empty.
+//
+// The 26 letter CENTRES keep their normalized positions exactly (they come from
+// languages/en/layout.json via decoder.keys, the same geometry installed into
+// SwipeEngine::set_layout), so this layout is a zero-diff change to the model's
+// inputs: the SwipeSurface still normalizes against the letter block alone.
 Window {
     id: win
-    width: 900; height: 360; visible: true
+    width: 560; height: 280
+    // Shown from main.cpp AFTER the layer-shell surface is configured: the
+    // surface type (layer vs xdg-toplevel) is fixed at first commit, and QML
+    // visible:true would commit a plain toplevel before WindowCtl::attach ran
+    // ("Cannot set shell integration while there's already a shell surface").
+    visible: false
     flags: Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus | Qt.FramelessWindowHint
-    color: pal.bg
+    color: hidden ? "transparent" : pal.shell
+    minimumWidth:  collapsed ? 1 : 320
+    minimumHeight: collapsed ? 1 : 170
 
     // ---- FUTO-inspired palette ----
     readonly property QtObject pal: QtObject {
-        readonly property color bg: "#e8eaed"          // keyboard background (soft gray)
+        readonly property color shell: "#c8ccd1"       // frame / resize ring
+        readonly property color bg: "#e8eaed"          // keyboard background
         readonly property color key: "#ffffff"         // letter keys
         readonly property color keyPop: "#d3e3fd"      // key under the cursor
         readonly property color keyText: "#202124"
         readonly property color action: "#bdc1c6"      // space / punct / backspace
         readonly property color actionHold: "#9aa0a6"  // backspace while held
         readonly property color actionText: "#3c4043"
-        readonly property color accent: "#1a73e8"      // FUTO-ish blue
+        readonly property color accent: "#1a73e8"
         readonly property color accentText: "#ffffff"
         readonly property color candBar: "#f1f3f4"
         readonly property color muted: "#5f6368"
@@ -25,38 +46,167 @@ Window {
         readonly property color committedText: "#e8eaed"
     }
 
-    property int wordSwipePx: 60      // leftward px per word deleted (≈ one key width)
+    // ---- geometry: two units, everything else derived (ADR-0005 §1) ----
+    // The frame is the resize ring; it is the only deliberate dead space left.
+    readonly property real frame:    Math.max(4, Math.min(8, width * 0.008))
+    readonly property real contentW: width  - 2 * frame
+    readonly property real contentH: height - 2 * frame
+    readonly property real u:        contentW / 10                                  // column
+    readonly property real chromeH:  Math.max(16, Math.min(u * 0.95, contentH * 0.24))
+    readonly property real actionH:  chromeH
+    readonly property real rowH:     Math.max(10, (contentH - chromeH - actionH) / 3)
+    readonly property real kgap:     Math.max(1, u * 0.045)                         // key inset
+    readonly property real krad:     Math.max(2, u * 0.16)
+    // Letter-block aspect. The free-resize band is a verification gate in ADR-0005
+    // (it has to be measured against the corpus, not guessed), so nothing is
+    // clamped to it yet — this is surfaced in diagnostics so the measurement has
+    // something to read.
+    readonly property real letterAspect: rowH > 0 ? contentW / (3 * rowH) : 0
 
-    // Keys scale with the window (min of width/height constraints) so they never
-    // squish or overlap when resized. keySize = one cell; the key visual is smaller.
-    property real keySize: Math.max(30, Math.min((width - 24) / 10, (height - 48) / 5.8))
-    property real keyVis: keySize * 0.88
-    property real keyRadius: keySize * 0.20
+    // ---- manual move/resize (works without a WM role: layer-shell margins or
+    // plain x/y on xcb — startSystemMove/Resize needs a WM and is a silent no-op
+    // on layer-shell) ----
+    function moveTo(x, y) {
+        win.x = Math.max(0, x); win.y = Math.max(0, y);
+        windowCtl.move(win.x, win.y);
+    }
+    function sizeTo(w, h) {
+        win.width = Math.max(win.minimumWidth, w);
+        win.height = Math.max(win.minimumHeight, h);
+    }
 
-    property var keys: [
-        {l:"Q",x:0.05,y:0.167},{l:"W",x:0.15,y:0.167},{l:"E",x:0.25,y:0.167},{l:"R",x:0.35,y:0.167},{l:"T",x:0.45,y:0.167},
-        {l:"Y",x:0.55,y:0.167},{l:"U",x:0.65,y:0.167},{l:"I",x:0.75,y:0.167},{l:"O",x:0.85,y:0.167},{l:"P",x:0.95,y:0.167},
-        {l:"A",x:0.10,y:0.500},{l:"S",x:0.20,y:0.500},{l:"D",x:0.30,y:0.500},{l:"F",x:0.40,y:0.500},{l:"G",x:0.50,y:0.500},
-        {l:"H",x:0.60,y:0.500},{l:"J",x:0.70,y:0.500},{l:"K",x:0.80,y:0.500},{l:"L",x:0.90,y:0.500},
-        {l:"Z",x:0.20,y:0.833},{l:"X",x:0.30,y:0.833},{l:"C",x:0.40,y:0.833},{l:"V",x:0.50,y:0.833},{l:"B",x:0.60,y:0.833},
-        {l:"N",x:0.70,y:0.833},{l:"M",x:0.80,y:0.833}
-    ]
+    // ---- window state ----
+    property bool collapsed: false
+    property int  expandedW: 560
+    property int  expandedH: 280
+    readonly property int puckW: Math.max(96, Math.round(expandedW * 0.22))
+    readonly property int puckH: Math.max(30, Math.round(expandedW * 0.075))
+    property bool menuOpen: false
+    property bool showDiagnostics: false
+    // "Hidden" keeps the surface MAPPED: GNOME Wayland won't let a client place
+    // its own toplevel, so unmapping (visible=false) makes Mutter re-place it on
+    // re-show and the keyboard loses its spot. Instead we render the mapped
+    // window invisible (opacity 0) and click-through (empty input region); Mutter
+    // never re-places it and the keyboard reappears exactly where it was.
+    property bool hidden: false
+    readonly property int transparentForInput: 0x00080000  // Qt::WindowTransparentForInput
 
-    // ---- state ----
-    property var candidates: []
+    // ---- input state ----
+    property string layer: "abc"        // "abc" | "sym"
+    property int    shiftState: 0       // 0 off · 1 once · 2 lock
+    property var    candidates: []
     property string greedyText: ""
-    property real decMs: 0.0
-    property bool pending: false
-    property bool lastShort: false
-    property string lastWord: ""
-    property bool timedOut: false
-    // words in the committed text available to delete (drives the swipe-delete gauge)
-    readonly property int availWords: injected.length ? injected.replace(/^\s+|\s+$/g, "").split(/\s+/).filter(function(w){return w.length;}).length : 0
-    property bool decoderDead: false
+    property real   decMs: 0.0
+    property bool   pending: false
+    property bool   lastShort: false
+    property bool   timedOut: false
+    // Recent-word history (spec §9.3). Each entry remembers where the word sits
+    // in `injected` and the candidate list its glide produced, so ANY of the last
+    // few words can still be corrected in one click — not just the newest one,
+    // which was the previous limit and the expensive kind of mistake for a
+    // mouse-only user (the alternative is backspacing everything after it).
+    property var    history: []      // [{text, cands, start, len}]
+    property int    histOpen: -1     // index into history whose popup is open
+    property real   histOpenX: 0
+    readonly property int histMax: 12
+    property string pendingUndo: ""      // word removed by a ⌫ tap, restorable
+    property var    pendingUndoEntry: null
+    property int    undoGen: -1          // target the staged undo belongs to
+
+    // ---- target identity: never edit a document we no longer own ------------
+    // Corrections are "delete N chars, retype" against offsets into `injected`,
+    // our mirror of the focused field. If focus moves to a DIFFERENT field the
+    // offsets still validate — the mirror didn't change — but they now address
+    // the wrong document, so clicking a stale chip would silently edit whatever
+    // the user switched to. trimHistory() cannot catch this: it only detects
+    // drift WITHIN a still-focused field.
+    //
+    // Two layers, because the precise signal is not always available:
+    //  1. targetGen — IBus focus_in/focus_out/disable. Exact, but only while
+    //     OpenGlide is the active IME (i.e. GNOME/IBus).
+    //  2. staleMs — an age cap, which is all we have on the uinput fallback
+    //     (KDE/Fcitx, no IME focus signal at all). Deliberately much shorter
+    //     there: with no way to know the target changed, old is the only proxy.
+    property int  targetGen: 0
+    // The 5-min cap trusts per-focus generation events; on kwin the bridge
+    // enables once and may never re-fire, so the short cap stays unless the
+    // bridge is GNOME-grade (text-capable is the proxy for that).
+    readonly property int staleMs: (ibusActive && ibusTextCapable) ? 300000 : 20000
+    function entryLive(e) {
+        return e !== null && e !== undefined
+            && e.gen === targetGen
+            && (Date.now() - e.t) < staleMs;
+    }
+    Timer {
+        interval: 400; repeat: true
+        running: win.visible && !win.collapsed && !win.hidden
+        onTriggered: {
+            const g = injector.targetGeneration();
+            if (g !== win.targetGen) {
+                win.targetGen = g;      // focus moved: every prior entry is now stale
+                win.candidates = [];    // and so are the candidates for the last glide
+                win.histOpen = -1;
+                win.clearUndo();
+            }
+        }
+    }
+
+    // What the chrome slots show. Right after a glide those slots ARE the
+    // alternatives for the word just committed, so candidates take priority;
+    // once the candidates are stale (you typed, spaced, punctuated) the same
+    // slots become the recent words, each still carrying its own alternatives.
+    // Contextual, so history costs no permanent rows and the glide surface stays
+    // at 60% (ADR-0005 §1).
+    readonly property bool showingHistory: candidates.length === 0 && chromeSlots.length > 0
+    readonly property var chromeSlots: {
+        var a = [];
+        if (pendingUndo.length)      // an undo offer outranks both
+            a.push({text: "↶ undo " + pendingUndo.replace(/\s+$/, ""), hist: false, undo: true, idx: -1});
+        const room = 4 - a.length;
+        if (candidates.length > 0) {
+            for (var i = 0; i < Math.min(room, candidates.length); i++)
+                a.push({text: candidates[i].text, hist: false, undo: false, idx: i});
+            return a;
+        }
+        // Only entries we can still prove belong to the current target are
+        // offered — a chip you cannot safely act on must not be clickable.
+        var live = [];
+        for (var j = 0; j < history.length; j++)
+            if (entryLive(history[j])) live.push(j);
+        for (var k = Math.max(0, live.length - room); k < live.length; k++)
+            a.push({text: history[live[k]].text, hist: true, undo: false, idx: live[k]});
+        return a;
+    }
+    property bool   decoderDead: false
     property string injected: ""
-    property string activeKey: ""        // key under the cursor during a glide (key-pop)
-    property int warmupSecs: 0
-    property bool ibusActive: false
+    property string activeKey: ""
+    property int    warmupSecs: 0
+    property bool   ibusActive: false
+    property bool   ibusTextCapable: false
+    readonly property int availWords: injected.length ? injected.replace(/^\s+|\s+$/g, "").split(/\s+/).filter(function (w) { return w.length; }).length : 0
+    // Leftward travel per deleted word — one column, so the gesture feels the
+    // same at every window size (it used to be a fixed 60 px).
+    readonly property real wordSwipePx: u
+
+    // Symbols layer. Reuses the letter block's three-row grid exactly, so the
+    // keys land on the same centres — only the glyphs differ. Tap-only: gliding
+    // is disabled while this layer is up.
+    readonly property var symKeys: [
+        {l: "1", c: "1", x: 0.05, y: 0.167}, {l: "2", c: "2", x: 0.15, y: 0.167},
+        {l: "3", c: "3", x: 0.25, y: 0.167}, {l: "4", c: "4", x: 0.35, y: 0.167},
+        {l: "5", c: "5", x: 0.45, y: 0.167}, {l: "6", c: "6", x: 0.55, y: 0.167},
+        {l: "7", c: "7", x: 0.65, y: 0.167}, {l: "8", c: "8", x: 0.75, y: 0.167},
+        {l: "9", c: "9", x: 0.85, y: 0.167}, {l: "0", c: "0", x: 0.95, y: 0.167},
+        {l: "@", c: "@", x: 0.10, y: 0.500}, {l: "#", c: "#", x: 0.20, y: 0.500},
+        {l: "$", c: "$", x: 0.30, y: 0.500}, {l: "%", c: "%", x: 0.40, y: 0.500},
+        {l: "&", c: "&", x: 0.50, y: 0.500}, {l: "-", c: "-", x: 0.60, y: 0.500},
+        {l: "+", c: "+", x: 0.70, y: 0.500}, {l: "(", c: "(", x: 0.80, y: 0.500},
+        {l: ")", c: ")", x: 0.90, y: 0.500},
+        {l: "*", c: "*", x: 0.20, y: 0.833}, {l: "\"", c: "\"", x: 0.30, y: 0.833},
+        {l: "'", c: "'", x: 0.40, y: 0.833}, {l: ":", c: ":", x: 0.50, y: 0.833},
+        {l: ";", c: ";", x: 0.60, y: 0.833}, {l: "!", c: "!", x: 0.70, y: 0.833},
+        {l: "?", c: "?", x: 0.80, y: 0.833}
+    ]
 
     function stateText() {
         if (decoderDead) return "decoder stopped — restart the app";
@@ -65,107 +215,347 @@ Window {
         if (pending) return "decoding…";
         if (timedOut) return "decode stalled — glide again";
         if (candidates.length === 0) return "focus a text editor, then glide a word here";
-        return `top-1 “${candidates[0].text}” committed   (greedy “${greedyText}”, ${decMs.toFixed(0)} ms)`;
+        return `top-1 “${candidates[0].text}” (greedy “${greedyText}”, ${decMs.toFixed(0)} ms)`;
     }
-    Timer { interval: 1000; repeat: true; running: !decoder.ready && visible; onTriggered: warmupSecs += 1 }
-    Timer { interval: 800; repeat: true; running: visible; onTriggered: ibusActive = injector.ibusActive() }
+    Timer { interval: 1000; repeat: true; running: !decoder.ready && win.visible; onTriggered: win.warmupSecs += 1 }
+    Timer { interval: 800; repeat: true; running: win.visible; onTriggered: { win.ibusActive = injector.ibusActive(); win.ibusTextCapable = injector.ibusTextCapable() } }
 
-    // ---- injection ops (each keeps `injected` in sync with the target field) ----
-    function commitDecoded(word) { injector.commit(word); injected += word + " "; lastWord = word; decoder.bumpWord(word); }
-    function tapSpace()          { injector.typeChar(" "); injected += " "; }
+    // ================= caret avoidance =================
+    // The focused app reports where its text cursor is (IBus set_cursor_location).
+    // An IME normally uses that to put a candidate popup NEXT to the caret; we
+    // want the opposite — to get out from on top of the text being typed. Spec §17
+    // covers focus; this covers occlusion, which is the other half of "the
+    // keyboard must not be obstructive".
+    //
+    // Deliberately timid: it only ever moves the window when it is genuinely
+    // covering the caret, it moves the minimum distance, it never moves during a
+    // glide or a drag, and it stays inside the screen. Many toolkits never report
+    // at all — then caretReports() stays 0 and this does nothing, which is why it
+    // is safe to leave on.
+    // Preedit probe (no behaviour change yet). Deletion is broken on GNOME — the
+    // IBus delete API aborts the shell, forwarded BackSpace is ignored, and uinput
+    // targets the focused surface rather than the commit context — so every
+    // correction path rests on a shaky primitive. Preedit is the way out: leave the
+    // current word UNCOMMITTED and editing it needs no deletion at all. But that
+    // only works in clients that can display preedit, and terminals/Electron often
+    // cannot. So: report what the focused app declares, and decide from data.
+    property bool preeditSupported: false
+    property int  clientCaps: -1
+    Timer {
+        interval: 700; repeat: true
+        running: win.visible && !win.collapsed
+        onTriggered: {
+            win.preeditSupported = injector.preeditSupported();
+            win.clientCaps = injector.capabilities();
+        }
+    }
+
+    property bool avoidCaret: true
+    property rect caretRect: Qt.rect(0, 0, 0, 0)
+    property int  caretReports: 0
+
+    function checkCaret() {
+        if (hidden || collapsed) return;
+        caretReports = injector.caretReports();
+        if (caretReports <= 0) return;
+        const c = injector.caretRect();
+        caretRect = c;
+        if (!avoidCaret || surface.swiping || menuOpen) return;
+        if (c.width <= 0 && c.height <= 0 && c.x === 0 && c.y === 0) return;
+
+        // Treat a zero-size report as a thin caret so the margin still applies.
+        const ch = c.height > 0 ? c.height : Math.round(u * 0.4);
+        const pad = Math.round(u * 0.35);
+        const top = y, bottom = y + height;
+        const cTop = c.y - pad, cBottom = c.y + ch + pad;
+        if (cBottom <= top || cTop >= bottom) return;            // already clear of it
+
+        const scr = Screen.desktopAvailableHeight;
+        const below = cBottom;                    // window top if we sit under it
+        const above = cTop - height;              // window top if we sit over it
+        const canBelow = below + height <= scr;
+        const canAbove = above >= 0;
+        var ny = y;
+        if (canBelow && canAbove)      ny = (Math.abs(below - y) <= Math.abs(above - y)) ? below : above;
+        else if (canBelow)             ny = below;
+        else if (canAbove)             ny = above;
+        else                           return;    // nowhere to go; leave it alone
+        if (ny !== y) y = ny;
+    }
+    Timer {
+        interval: 500; repeat: true
+        running: win.visible && !win.collapsed
+        onTriggered: win.checkCaret()
+    }
+
+    // Human-readable name for the configured global gesture (spec §13.6).
+    function toggleGesture() {
+        const m = toggleListener.mode;
+        if (m === "middle") return "middle click";
+        if (m === "mouse4") return "Mouse4";
+        if (m === "mouse5") return "Mouse5";
+        return "hold L+R";
+    }
+
+    // ================= shift =================
+    function shifted(c) { return shiftState > 0 ? c.toUpperCase() : c; }
+    function consumeShift() { if (shiftState === 1) shiftState = 0; }
+    function cycleShift() { shiftState = (shiftState + 1) % 3; }
+
+    // ================= injection ops (keep `injected` in sync with the target) ==
+    function commitDecoded(word) {
+        clearUndo();
+        const w = shiftState > 0 ? word.charAt(0).toUpperCase() + word.substring(1) : word;
+        const start = injected.length;
+        injector.commit(w);
+        injected += w + " ";
+        decoder.bumpWord(word);     // personalization keys on the dictionary form
+        consumeShift();
+        pushHistory(w, candidates, start);
+    }
+
+    // ================= recent-word history (spec §9.3) =================
+    function pushHistory(text, cands, start) {
+        var h = history.slice();
+        h.push({text: text, cands: cands, start: start, len: text.length,
+                gen: targetGen, t: Date.now()});   // which target this belongs to
+        while (h.length > histMax) h.shift();
+        history = h;
+    }
+    // Entries are only trustworthy while they still match the mirror. Manual
+    // editing (backspace, word-delete, punctuation collapsing a space) moves the
+    // text under them, so re-check and drop whatever no longer lines up rather
+    // than correcting the wrong span later.
+    function trimHistory() {
+        var h = [];
+        for (var i = 0; i < history.length; i++) {
+            const e = history[i];
+            if (injected.substr(e.start, e.len) === e.text) h.push(e);
+        }
+        if (h.length !== history.length) history = h;
+        if (histOpen >= history.length) histOpen = -1;
+    }
+    // Replace history entry `hi`, retyping whatever follows it (spec §9.2 — with
+    // a rich IME this would be a direct replacement; here it is delete + recommit).
+    function replaceHistory(hi, newText) {
+        if (hi < 0 || hi >= history.length) return;
+        const e = history[hi];
+        // Refuse rather than edit blind: this entry's offsets were computed against
+        // a target we may no longer be typing into.
+        if (!entryLive(e)) { histOpen = -1; return; }
+        if (injected.substr(e.start, e.len) !== e.text) { trimHistory(); return; }
+        if (newText === e.text) return;
+        const suffix = injected.substring(e.start + e.len);
+        injector.backspace(e.len + suffix.length);
+        injector.commitExact(newText + suffix);
+        injected = injected.substring(0, e.start) + newText + suffix;
+        const delta = newText.length - e.len;
+        var h = history.slice();
+        h[hi] = {text: newText, cands: e.cands, start: e.start, len: newText.length,
+                 gen: e.gen, t: e.t};
+        for (var j = hi + 1; j < h.length; j++)
+            h[j] = {text: h[j].text, cands: h[j].cands, start: h[j].start + delta,
+                    len: h[j].len, gen: h[j].gen, t: h[j].t};
+        history = h;
+        histOpen = -1;
+        decoder.bumpWord(newText.toLowerCase());   // the user chose this — boost it
+    }
+    function deleteHistory(hi) {
+        if (hi < 0 || hi >= history.length) return;
+        const e = history[hi];
+        if (!entryLive(e)) { histOpen = -1; return; }
+        if (injected.substr(e.start, e.len) !== e.text) { trimHistory(); return; }
+        const extra = injected[e.start + e.len] === " " ? 1 : 0;   // swallow one space
+        const suffix = injected.substring(e.start + e.len + extra);
+        injector.backspace(e.len + extra + suffix.length);
+        if (suffix.length) injector.commitExact(suffix);
+        injected = injected.substring(0, e.start) + suffix;
+        const delta = -(e.len + extra);
+        var h = history.slice();
+        h.splice(hi, 1);
+        for (var j = hi; j < h.length; j++)
+            h[j] = {text: h[j].text, cands: h[j].cands, start: h[j].start + delta,
+                    len: h[j].len, gen: h[j].gen, t: h[j].t};
+        history = h;
+        histOpen = -1;
+        candidates = [];
+    }
+    function typeKey(c) {
+        clearUndo();
+        const ch = shifted(c);
+        injector.typeChar(ch);
+        injected += ch;
+        consumeShift();
+    }
+    function tapSpace() { clearUndo(); injector.typeChar(" "); injected += " "; }
+    function tapEnter() { injector.typeChar("\n"); injected += "\n"; }
     function tapPunct(p) {                       // collapse a preceding space, then "p "
+        clearUndo();
         if (injected.length && injected[injected.length - 1] === " ") {
             injector.backspace(1);
             injected = injected.substring(0, injected.length - 1);
         }
         injector.typeChar(p); injector.typeChar(" ");
         injected += p + " ";
+        trimHistory();          // the collapsed space moved everything after it
     }
     function deleteChar() {
         if (!injected.length) return;
-        candidates = []; lastWord = "";   // editing invalidates the last glide's suggestions
+        clearUndo();
+        candidates = [];                  // editing invalidates the last glide's suggestions
         injector.backspace(1);
         injected = injected.substring(0, injected.length - 1);
+        trimHistory();
     }
     function deleteWord() {                      // backspace-swipe: trailing spaces + one word
         if (!injected.length) return "";
-        candidates = []; lastWord = "";
+        clearUndo();          // tapDeleteWord re-stages after this returns
+        candidates = [];
         var i = injected.length, n = 0;
         while (i > 0 && injected[i - 1] === " ") { i--; n++; }
         while (i > 0 && injected[i - 1] !== " ") { i--; n++; }
         const deleted = injected.substring(i);
         injector.backspace(n);
         injected = injected.substring(0, i);
-        return deleted;                          // staged so swipe-right can undo it
+        trimHistory();
+        return deleted;
     }
-    function undoWord(s) {                        // swipe-right: re-inject a staged deletion verbatim
-        candidates = []; lastWord = "";
-        injector.commitExact(s);   // one IBus commit of the exact deleted string (per-char typeChar was slow/racey mid-gesture)
+    function undoWord(s) {
+        candidates = [];
+        injector.commitExact(s);
         injected += s;
     }
-    function correct(i) {
-        if (i < 0 || i >= candidates.length) return;
-        const nw = candidates[i].text;
-        if (nw === lastWord) return;
-        if (lastWord.length > 0) {
-            injector.backspace(lastWord.length + 1);
-            injected = injected.substring(0, injected.length - (lastWord.length + 1));
-        }
-        injector.commit(nw);
-        injected += nw + " ";
-        lastWord = nw;
-        decoder.bumpWord(nw);   // personalization: the user chose this word — boost it
+    // Tapping ⌫ removes a whole word, so a mis-tap costs a word rather than a
+    // character — and the swipe-right undo only covers the swipe gesture. Stage
+    // the deletion (with its history entry, so the alternatives come back too)
+    // and offer it as a chip until it times out.
+    function tapDeleteWord() {
+        const hBefore = history;
+        const s = deleteWord();
+        if (!s.length) return;
+        pendingUndoEntry = hBefore.length > history.length ? hBefore[hBefore.length - 1] : null;
+        undoGen = targetGen;
+        pendingUndo = s;
+        undoTimer.restart();
     }
-    function nearestKey(nx, ny) {                 // for key-pop: closest key to the cursor, in pixels
-        var best = "", bestD = 1e9, W = kb.width, H = kb.height;
-        for (var i = 0; i < keys.length; i++) {
-            var k = keys[i], dx = (k.x - nx) * W, dy = (k.y - ny) * H, d = dx*dx + dy*dy;
-            if (d < bestD) { bestD = d; best = k.l; }
+    function undoDelete() {
+        if (!pendingUndo.length) return;
+        if (undoGen !== targetGen) { clearUndo(); return; }   // different target now
+        const start = injected.length;          // deleteWord() returns "word" + spaces
+        injector.commitExact(pendingUndo);
+        injected += pendingUndo;
+        if (pendingUndoEntry)
+            pushHistory(pendingUndoEntry.text, pendingUndoEntry.cands, start);
+        clearUndo();
+    }
+    function clearUndo() {
+        pendingUndo = ""; pendingUndoEntry = null; undoGen = -1;
+        undoTimer.stop();
+    }
+    Timer { id: undoTimer; interval: 8000; onTriggered: win.clearUndo() }
+    // Candidate click. The newest word is just the last history entry, so this is
+    // the same operation the history popup performs — one code path, not two.
+    function correct(i) {
+        if (i < 0 || i >= candidates.length || !history.length) return;
+        const hi = history.length - 1;
+        const old = history[hi].text;
+        var nw = candidates[i].text;
+        if (old.length && old[0] !== old[0].toLowerCase())   // keep the capitalization
+            nw = nw.charAt(0).toUpperCase() + nw.substring(1);
+        replaceHistory(hi, nw);
+    }
+    // Closest key to the cursor, in PIXELS (the normalized frame is anisotropic).
+    function nearestKey(nx, ny) {
+        var best = null, bestD = 1e9;
+        const W = kb.width, H = kb.height, ks = win.layer === "sym" ? win.symKeys : decoder.keys;
+        for (var i = 0; i < ks.length; i++) {
+            const k = ks[i], dx = (k.x - nx) * W, dy = (k.y - ny) * H, d = dx * dx + dy * dy;
+            if (d < bestD) { bestD = d; best = k; }
         }
         return best;
     }
 
-    // ---- top bar: drag handle (frameless move) + candidates + IME status + close ----
-    Rectangle {
-        id: topbar
-        anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
-        height: keyVis + keySize * 0.30; color: pal.candBar
-        MouseArea { anchors.fill: parent; onPressed: function(mouse) { win.startSystemMove() } }  // drag empty space to move
-        Text {   // IME status (left)
-            anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10
-            text: win.ibusActive ? "OpenGlide IME ✓" : "IME: other"
-            font.pixelSize: keySize * 0.24; color: win.ibusActive ? pal.accent : pal.muted
+    // ================= window ops =================
+    function collapse() {
+        if (collapsed) return;
+        expandedW = width; expandedH = height;
+        collapsed = true;
+        menuOpen = false;
+        width = puckW; height = puckH;
+    }
+    function expand() {
+        if (!collapsed) return;
+        collapsed = false;
+        width = expandedW; height = expandedH;
+    }
+    function rescale(f) {
+        if (collapsed) return;
+        width  = Math.max(320, Math.round(width  * f));
+        height = Math.max(170, Math.round(height * f));
+    }
+    function preset(w, h) {
+        if (collapsed) return;
+        width = w; height = h; menuOpen = false;
+    }
+    // Hidden (spec §13.5): the keyboard is gone from view but the Wayland surface
+    // stays MAPPED — invisible (opacity 0) and click-through (empty input region).
+    // Unmapping (visible=false) would make Mutter re-place it on re-show (see the
+    // `hidden` property above), losing the remembered spot. Only offered when the
+    // global evdev listener runs: hiding with no way back would be the same trap
+    // as a one-click quit, just slower to discover.
+    function hideCompletely() {
+        if (!toggleListener.available) return;
+        menuOpen = false;
+        persistGeometry();
+        hidden = true;
+        flags = flags | transparentForInput;   // empty input region → click-through
+        contentItem.visible = false;          // no content painted → transparent buffer (QWindow::opacity is a no-op on Qt Wayland)
+        pointerSpeed.leave();                   // lift slowdown over the ghost window
+    }
+    function unhide() {
+        if (hidden) {
+            hidden = false;
+            contentItem.visible = true;
+            flags = flags & ~transparentForInput;   // input region restored
         }
-        Row {   // candidates (center)
-            anchors.centerIn: parent; spacing: keySize * 0.10
-            Repeater {
-                model: win.candidates
-                Rectangle {
-                    width: keySize * 2.4; height: keyVis * 0.80; radius: height / 2
-                    color: index === 0 ? pal.accent : "#ffffff"
-                    border.color: "#dadce0"; border.width: index === 0 ? 0 : 1
-                    Text {
-                        anchors.centerIn: parent
-                        text: modelData.text; font.bold: index === 0; font.pixelSize: keySize * 0.26
-                        color: index === 0 ? pal.accentText : pal.keyText
-                    }
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.correct(index) }
-                }
-            }
-        }
-        Rectangle {   // close (right)
-            anchors.verticalCenter: parent.verticalCenter; anchors.right: parent.right; anchors.rightMargin: 8
-            width: keyVis * 0.7; height: keyVis * 0.7; radius: height / 2; color: "transparent"
-            Text { anchors.centerIn: parent; text: "×"; font.pixelSize: keySize * 0.40; color: pal.muted }
-            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Qt.quit() }
-        }
+        raise();
+    }
+    function toggleVisibility() {
+        if (hidden) unhide();
+        else if (toggleListener.available) hideCompletely();
+        else collapse();     // no listener: collapse is the reversible option
     }
 
-    Text {
-        id: status
-        anchors.top: topbar.bottom; anchors.horizontalCenter: parent.horizontalCenter; anchors.topMargin: 2
-        text: win.stateText()
-        font.pixelSize: keySize * 0.22; color: pal.muted
+    Connections {
+        target: toggleListener
+        function onToggleRequested() { win.toggleVisibility() }
+    }
+
+    function persistGeometry() {
+        if (!collapsed) {
+            settings.setValue("window/width", width);
+            settings.setValue("window/height", height);
+        }
+        settings.setValue("window/x", windowCtl.posX());
+        settings.setValue("window/y", windowCtl.posY());
+        settings.sync();
+    }
+    Timer { id: saveGeom; interval: 600; onTriggered: win.persistGeometry() }
+    onWidthChanged:  if (!collapsed) saveGeom.restart()
+    onHeightChanged: if (!collapsed) saveGeom.restart()
+    onXChanged: saveGeom.restart()
+    onYChanged: saveGeom.restart()
+
+    Component.onCompleted: {
+        const w = parseInt(settings.value("window/width", 560));
+        const h = parseInt(settings.value("window/height", 280));
+        if (w > 0 && h > 0) { win.width = Math.max(320, w); win.height = Math.max(170, h); }
+        const sx = parseInt(settings.value("window/x", -1));
+        const sy = parseInt(settings.value("window/y", -1));
+        if (sx >= 0 && sy >= 0) { win.x = sx; win.y = sy; windowCtl.move(sx, sy); }
+        win.expandedW = win.width; win.expandedH = win.height;
+        win.avoidCaret = settings.value("window/avoidCaret", true) !== false
+                      && String(settings.value("window/avoidCaret", true)) !== "false";
     }
 
     Timer {
@@ -174,170 +564,792 @@ Window {
         onTriggered: if (win.pending) { win.pending = false; win.timedOut = true; win.candidates = [] }
     }
 
-    // ---- keyboard / glide surface (keys scale with the window) ----
-    Item {
-        id: kb
-        anchors.top: status.bottom; anchors.topMargin: keySize * 0.06
-        anchors.horizontalCenter: parent.horizontalCenter
-        width: 10 * keySize; height: 3 * keySize
-
-        Repeater {
-            model: win.keys
-            Rectangle {
-                x: modelData.x * kb.width - keyVis / 2; y: modelData.y * kb.height - keyVis / 2
-                width: keyVis; height: keyVis; radius: keyRadius
-                color: modelData.l === win.activeKey ? pal.keyPop : pal.key
-                z: modelData.l === win.activeKey ? 1 : 0
-                transformOrigin: Item.Center
-                Behavior on scale { NumberAnimation { duration: 70; easing.type: Easing.OutCubic } }
-                scale: modelData.l === win.activeKey ? 1.18 : 1.0
-                Text { anchors.centerIn: parent; text: modelData.l; font.bold: true; font.pixelSize: keyVis * 0.44; color: pal.keyText }
-            }
+    // ======================= COLLAPSED: the puck =======================
+    // `×` collapses to this instead of quitting. It is draggable, always on top,
+    // needs no permissions, and one click brings the keyboard back — the
+    // guaranteed mouse-only way home (ADR-0005 §5). Quit lives in the ⋯ menu.
+    Rectangle {
+        visible: win.collapsed
+        anchors.fill: parent
+        color: pal.committedBg
+        radius: Math.max(3, height * 0.18)
+        Text {
+            anchors.centerIn: parent
+            text: "⌨  OpenGlide"
+            color: pal.committedText
+            font.pixelSize: Math.max(9, parent.height * 0.36)
         }
-
-        Canvas {
-            id: pathCanvas
+        Rectangle {   // IME indicator
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.right: parent.right; anchors.rightMargin: parent.height * 0.28
+            width: parent.height * 0.20; height: width; radius: width / 2
+            color: win.ibusActive ? pal.accent : pal.muted
+        }
+        MouseArea {
             anchors.fill: parent
-            property var pts: []
-            onPaint: {
-                const ctx = getContext("2d"); ctx.reset();
-                if (pts.length < 2) return;
-                ctx.strokeStyle = pal.accent; ctx.lineWidth = keyVis * 0.12; ctx.lineCap = "round"; ctx.lineJoin = "round";
-                ctx.beginPath();
-                ctx.moveTo(pts[0].x * width, pts[0].y * height);
-                for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * width, pts[i].y * height);
-                ctx.stroke();
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+            cursorShape: Qt.PointingHandCursor
+            property real px: 0
+            property real py: 0
+            property bool moved: false
+            property real bx: 0
+            property real by: 0
+            property real s0x: 0
+            property real s0y: 0
+            onPressed: function (mouse) {
+                px = mouse.x; py = mouse.y; moved = false;
+                bx = windowCtl.posX(); by = windowCtl.posY();
+                s0x = windowCtl.posX() + mouse.x; s0y = windowCtl.posY() + mouse.y;
             }
+            onPositionChanged: function (mouse) {
+                if (!moved && Math.abs(mouse.x - px) + Math.abs(mouse.y - py) > 6) {
+                    moved = true;
+                }
+                if (moved && pressed) {
+                    const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                    const gx = windowCtl.posX() + mp.x, gy = windowCtl.posY() + mp.y;
+                    win.moveTo(bx + gx - s0x, by + gy - s0y);
+                }
+            }
+            onClicked: function (mouse) { if (!moved && mouse.button === Qt.LeftButton) win.expand() }
         }
-
-        SwipeSurface {
-            id: surface
-            anchors.fill: parent
-            onCursorMoved: function(nx, ny) { if (swiping) win.activeKey = win.nearestKey(nx, ny) }
-            onSwipingChanged: if (!swiping) win.activeKey = ""
-            onSwipeCompleted: function(points) {
-                if (points.length < 4) { win.lastShort = true; win.pending = false; win.candidates = []; return; }
-                win.lastShort = false;
-                pathCanvas.pts = points; pathCanvas.requestPaint();
-                win.candidates = []; win.pending = true; win.timedOut = false;
-                watchdog.restart();
-                if (decoder.ready) decoder.decode(points);
-            }
-            onTapped: function(nx, ny) {
-                var uk = win.nearestKey(nx, ny);
-                if (!uk) return;
-                injector.typeChar(uk.toLowerCase());
-                win.injected += uk.toLowerCase();
-                win.activeKey = uk;            // brief key-pop flash
-                tapFlash.restart();
-            }
-        }
-        Timer { id: tapFlash; interval: 120; onTriggered: if (!surface.swiping) win.activeKey = "" }
     }
 
-    // ---- action row: comma · space · period · backspace(FUTO gesture) — integrated, scaling ----
-    Row {
-        id: actionRow
-        anchors.top: kb.bottom; anchors.topMargin: keySize * 0.06
-        anchors.horizontalCenter: parent.horizontalCenter
-        height: keyVis; spacing: keySize * 0.12
+    // ======================= EXPANDED: the keyboard =======================
+    Item {
+        id: content
+        visible: !win.collapsed
+        x: win.frame; y: win.frame
+        width: win.contentW; height: win.contentH
 
-        Rectangle {   // comma
-            width: keySize * 1.5; height: keyVis; radius: keyRadius; color: pal.action
-            Text { anchors.centerIn: parent; text: ","; font.pixelSize: keyVis * 0.46; color: pal.actionText }
-            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.tapPunct(",") }
-        }
-        Rectangle {   // space (fills the middle)
-            height: keyVis; radius: keyRadius; color: pal.action
-            width: keySize * 5.0
-            Text { anchors.centerIn: parent; text: "space"; font.pixelSize: keyVis * 0.34; color: pal.actionText }
-            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.tapSpace() }
-        }
-        Rectangle {   // period
-            width: keySize * 1.5; height: keyVis; radius: keyRadius; color: pal.action
-            Text { anchors.centerIn: parent; text: "."; font.pixelSize: keyVis * 0.46; color: pal.actionText }
-            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.tapPunct(".") }
-        }
-        Rectangle {   // backspace — tap=char, hold=rapid char, hold+swipe-left=word delete (swipe-right=undo)
-            width: keySize * 2.0; height: keyVis; radius: keyRadius
-            color: bs.pressed ? pal.actionHold : pal.action
-            Text { anchors.centerIn: parent; text: "⌫"; font.pixelSize: keyVis * 0.50; color: pal.actionText }
+        Rectangle { anchors.fill: parent; color: pal.bg }
+
+        // ---------------- chrome bar: drag + candidates + controls ----------------
+        Rectangle {
+            id: topbar
+            x: 0; y: 0; width: parent.width; height: win.chromeH
+            color: pal.candBar
+
+            // Any chrome that is not a control is a drag handle. Deltas come
+            // from the seat-global cursor (windowCtl), not item-relative mouse
+            // coords — the window moves under the cursor while dragging, which
+            // makes item-relative deltas self-referential (drag cancels itself).
             MouseArea {
-                id: bs
                 anchors.fill: parent
-                property real startX
-                property int wordsDeleted
-                property bool swiping
-                property bool acted
-                property var deletedStack
-                onPressed: function(mouse) {
-                    startX = mouse.x; wordsDeleted = 0; swiping = false; acted = false; deletedStack = [];
-                    holdDelay.start();
+                // Screen-space cursor = our logical window position + the
+                // event's surface-relative offset. QCursor::pos() is NOT usable
+                // here: on Qt Wayland it returns surface-relative coordinates,
+                // and mixing spaces clamps every drag to (0,0).
+                property real bx: 0
+                property real by: 0
+                property real s0x: 0
+                property real s0y: 0
+                onPressed: function (mouse) {
+                    const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                    bx = windowCtl.posX(); by = windowCtl.posY();
+                    s0x = windowCtl.posX() + mp.x; s0y = windowCtl.posY() + mp.y;
                 }
-                onPositionChanged: function(mouse) {
-                    if (!pressed) return;
-                    const dx = mouse.x - startX;
-                    if (dx < -12) { holdDelay.stop(); swiping = true; }
-                    if (swiping) {
-                        const target = Math.max(0, Math.floor(-dx / win.wordSwipePx));
-                        while (wordsDeleted < target) {
-                            const s = win.deleteWord();
-                            if (!s.length) break;
-                            deletedStack.push(s); wordsDeleted++; acted = true;
-                        }
-                        while (wordsDeleted > target) {
-                            const s = deletedStack.pop();
-                            if (s === undefined) break;
-                            win.undoWord(s); wordsDeleted--;
+                onPositionChanged: function (mouse) {
+                    const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                    const gx = windowCtl.posX() + mp.x, gy = windowCtl.posY() + mp.y;
+                    win.moveTo(bx + gx - s0x, by + gy - s0y);
+                }
+                onReleased: win.persistGeometry()
+            }
+
+            Rectangle {   // IME status dot
+                x: win.u * 0.10; width: win.u * 0.18; height: width; radius: width / 2
+                anchors.verticalCenter: parent.verticalCenter
+                color: win.ibusActive ? pal.accent : pal.muted
+            }
+
+            // FIXED slots — same word, same place, every glide. Candidates when
+            // they are fresh, recent words otherwise (see chromeSlots).
+            Repeater {
+                model: 4
+                Rectangle {
+                    readonly property var slot: index < win.chromeSlots.length ? win.chromeSlots[index] : null
+                    readonly property bool isHist: slot ? slot.hist : false
+                    readonly property bool isUndo: slot ? slot.undo === true : false
+                    readonly property bool isTop: slot && !slot.hist && !slot.undo && slot.idx === 0
+                    x: win.u * (0.36 + index * 1.63); y: parent.height * 0.14
+                    width: win.u * 1.57; height: parent.height * 0.72
+                    radius: height / 2
+                    visible: slot !== null
+                    color: isTop ? pal.accent : (isHist || isUndo ? "transparent" : "#ffffff")
+                    border.color: isUndo ? pal.accent : (isHist ? pal.muted : "#dadce0")
+                    border.width: isTop ? 0 : (isUndo ? 2 : 1)
+                    Text {
+                        anchors.fill: parent; anchors.margins: parent.height * 0.18
+                        text: parent.slot ? parent.slot.text : ""
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                        font.bold: parent.isTop || parent.isUndo
+                        font.pixelSize: Math.max(8, win.u * 0.26)
+                        color: parent.isTop ? pal.accentText
+                               : parent.isUndo ? pal.accent
+                               : (parent.isHist ? pal.muted : pal.keyText)
+                    }
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (!parent.slot) return;
+                            if (parent.slot.undo) {
+                                win.undoDelete();
+                            } else if (parent.slot.hist) {
+                                win.histOpenX = parent.x;
+                                win.histOpen = win.histOpen === parent.slot.idx ? -1 : parent.slot.idx;
+                            } else {
+                                win.correct(parent.slot.idx);
+                            }
                         }
                     }
                 }
-                onReleased: {
-                    holdDelay.stop(); charRepeat.stop();
-                    if (!acted) win.deleteChar();
-                }
             }
-            Timer { id: holdDelay;  interval: 420; onTriggered: if (!bs.swiping) charRepeat.start() }
-            Timer { id: charRepeat; interval: 70; repeat: true; onTriggered: { win.deleteChar(); bs.acted = true } }
-        }
-    }
 
-    // swipe-delete gauge: one dot per deletable word; fills right-to-left as you
-    // pull left, so you can see exactly how far each word takes (no more "feel it").
-    Rectangle {
-        id: deleteGauge
-        visible: bs.swiping && win.availWords > 0
-        anchors.bottom: actionRow.top; anchors.bottomMargin: 6
-        anchors.right: parent.right; anchors.rightMargin: keySize * 0.5
-        width: Math.min(parent.width - keySize, keySize * 0.6 + win.availWords * keySize * 0.34)
-        height: keyVis * 0.8; radius: keyRadius
-        color: pal.committedBg; border.color: pal.accent; border.width: 2; z: 5
-        Text {
-            anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: keySize * 0.2
-            text: "−" + bs.wordsDeleted; color: pal.accentText; font.pixelSize: keySize * 0.26; font.bold: true
-        }
-        Row {
-            anchors.verticalCenter: parent.verticalCenter; anchors.right: parent.right; anchors.rightMargin: keySize * 0.2
-            layoutDirection: Qt.RightToLeft; spacing: keySize * 0.12
+            // Scale / collapse / menu. Resizing a frameless window by dragging a
+            // few-pixel edge is exactly the fine-motor task this product exists to
+            // remove, so the stepper is the primary path (ADR-0005 §4).
             Repeater {
-                model: win.availWords
+                model: [
+                    {g: "−",  slot: 7.00, act: "smaller"},
+                    {g: "+",  slot: 7.75, act: "bigger"},
+                    {g: "▾",  slot: 8.50, act: "collapse"},
+                    {g: "⋯",  slot: 9.25, act: "menu"}
+                ]
                 Rectangle {
-                    width: keySize * 0.22; height: keySize * 0.22; radius: width / 2
-                    color: index < bs.wordsDeleted ? pal.accent : "#6b7178"
+                    x: win.u * modelData.slot; y: parent.height * 0.14
+                    width: win.u * 0.70; height: parent.height * 0.72
+                    radius: Math.max(2, win.u * 0.10)
+                    color: ma.containsMouse ? "#ffffff" : "transparent"
+                    Text {
+                        anchors.centerIn: parent; text: modelData.g
+                        font.pixelSize: Math.max(9, win.u * 0.30); color: pal.muted
+                    }
+                    MouseArea {
+                        id: ma
+                        anchors.fill: parent; hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (modelData.act === "smaller")       win.rescale(1 / 1.12);
+                            else if (modelData.act === "bigger")   win.rescale(1.12);
+                            else if (modelData.act === "collapse") win.collapse();
+                            else                                   win.menuOpen = !win.menuOpen;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---------------- letter block = the glide surface ----------------
+        Item {
+            id: kb
+            x: 0; y: win.chromeH
+            width: parent.width; height: 3 * win.rowH
+
+            // Letters. Geometry comes from decoder.keys — the same layout.json the
+            // decoder scores against, so the two cannot drift (spec §7.2).
+            Repeater {
+                model: win.layer === "abc" ? decoder.keys : []
+                Rectangle {
+                    x: modelData.x * kb.width - win.u / 2 + win.kgap
+                    y: modelData.y * kb.height - win.rowH / 2 + win.kgap
+                    width:  win.u - 2 * win.kgap
+                    height: win.rowH - 2 * win.kgap
+                    radius: win.krad
+                    color: modelData.l === win.activeKey ? pal.keyPop : pal.key
+                    z: modelData.l === win.activeKey ? 1 : 0
+                    transformOrigin: Item.Center
+                    Behavior on scale { NumberAnimation { duration: 70; easing.type: Easing.OutCubic } }
+                    scale: modelData.l === win.activeKey ? 1.14 : 1.0
+                    Text {
+                        anchors.centerIn: parent
+                        text: win.shiftState > 0 ? modelData.l : modelData.c
+                        font.bold: true
+                        font.pixelSize: Math.max(9, Math.min(win.u, win.rowH) * 0.46)
+                        color: pal.keyText
+                    }
+                }
+            }
+
+            // Symbols layer — same grid, tap-only.
+            Repeater {
+                model: win.layer === "sym" ? win.symKeys : []
+                Rectangle {
+                    x: modelData.x * kb.width - win.u / 2 + win.kgap
+                    y: modelData.y * kb.height - win.rowH / 2 + win.kgap
+                    width:  win.u - 2 * win.kgap
+                    height: win.rowH - 2 * win.kgap
+                    radius: win.krad
+                    color: sym.pressed ? pal.keyPop : pal.key
+                    Text {
+                        anchors.centerIn: parent; text: modelData.l
+                        font.bold: true
+                        font.pixelSize: Math.max(9, Math.min(win.u, win.rowH) * 0.42)
+                        color: pal.keyText
+                    }
+                    MouseArea {
+                        id: sym
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            injector.typeChar(modelData.c);
+                            win.injected += modelData.c;
+                        }
+                    }
+                }
+            }
+
+            // Live glide trail. It used to be painted only after release and never
+            // cleared, so what you saw mid-glide was the PREVIOUS word's path.
+            Canvas {
+                id: pathCanvas
+                anchors.fill: parent
+                property var pts: []
+                Behavior on opacity { NumberAnimation { duration: 220 } }
+                onPaint: {
+                    const ctx = getContext("2d"); ctx.reset();
+                    if (pts.length < 2) return;
+                    ctx.strokeStyle = pal.accent;
+                    ctx.lineWidth = Math.max(2, Math.min(win.u, win.rowH) * 0.13);
+                    ctx.lineCap = "round"; ctx.lineJoin = "round";
+                    ctx.beginPath();
+                    ctx.moveTo(pts[0].x * width, pts[0].y * height);
+                    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * width, pts[i].y * height);
+                    ctx.stroke();
+                }
+            }
+            Timer { id: pathFade; interval: 420; onTriggered: pathCanvas.opacity = 0 }
+
+            SwipeSurface {
+                id: surface
+                anchors.fill: parent
+                cols: 10; rows: 3          // key pitch, for the tap/swipe threshold
+                enabled: win.layer === "abc"
+                onCursorMoved: function (nx, ny) {
+                    if (!swiping) return;
+                    const k = win.nearestKey(nx, ny);
+                    win.activeKey = k ? k.l : "";
+                    pathCanvas.pts.push({x: nx, y: ny});
+                    pathCanvas.requestPaint();
+                }
+                onSwipingChanged: {
+                    if (swiping) {
+                        pathFade.stop();
+                        pathCanvas.opacity = 1;
+                        pathCanvas.pts = [];
+                        pathCanvas.requestPaint();
+                    } else {
+                        win.activeKey = "";
+                        pathFade.restart();
+                    }
+                }
+                onSwipeCompleted: function (points) {
+                    if (points.length < 4) { win.lastShort = true; win.pending = false; win.candidates = []; return; }
+                    win.lastShort = false;
+                    win.candidates = []; win.pending = true; win.timedOut = false;
+                    watchdog.restart();
+                    if (decoder.ready) decoder.decode(points);
+                }
+                onTapped: function (nx, ny) {
+                    const k = win.nearestKey(nx, ny);
+                    if (!k) return;
+                    win.typeKey(k.c);
+                    win.activeKey = k.l;
+                    tapFlash.restart();
+                }
+            }
+            Timer { id: tapFlash; interval: 120; onTriggered: if (!surface.swiping) win.activeKey = "" }
+
+            // ---- the wings: 1.5u at each end of row 3, previously empty ----
+            // Declared AFTER the SwipeSurface so they take the press: a glide may
+            // pass over them, but may not START on them.
+            Rectangle {
+                id: shiftKey
+                x: win.kgap; y: 2 * win.rowH + win.kgap
+                width: 1.5 * win.u - 2 * win.kgap; height: win.rowH - 2 * win.kgap
+                radius: win.krad
+                color: win.shiftState === 2 ? pal.accent : (win.shiftState === 1 ? pal.keyPop : pal.action)
+                Text {
+                    anchors.centerIn: parent
+                    text: win.shiftState === 2 ? "⇪" : "⇧"
+                    font.pixelSize: Math.max(10, Math.min(win.u, win.rowH) * 0.50)
+                    color: win.shiftState === 2 ? pal.accentText : pal.actionText
+                }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.cycleShift() }
+            }
+
+            Rectangle {
+                id: backspaceKey
+                x: 8.5 * win.u + win.kgap; y: 2 * win.rowH + win.kgap
+                width: 1.5 * win.u - 2 * win.kgap; height: win.rowH - 2 * win.kgap
+                radius: win.krad
+                color: bs.pressed ? pal.actionHold : pal.action
+                Text {
+                    anchors.centerIn: parent; text: "⌫"
+                    font.pixelSize: Math.max(10, Math.min(win.u, win.rowH) * 0.50); color: pal.actionText
+                }
+                // tap = word · hold = one char immediately, then repeat
+                //   · hold+swipe-left = multi-word delete · swipe-right = undo
+                // The hold deletes its first char the moment the threshold trips,
+                // not one repeat-interval later. Otherwise "delete exactly one
+                // character" was a 70 ms window after a 490 ms wait — unusable,
+                // and single chars are exactly what tap-to-type and the symbols
+                // layer produce. Now you hold, see one char go, and release.
+                MouseArea {
+                    id: bs
+                    anchors.fill: parent
+                    property real startX
+                    property int  wordsDeleted
+                    property bool swiping
+                    property bool acted
+                    property var  deletedStack
+                    onPressed: function (mouse) {
+                        startX = mouse.x; wordsDeleted = 0; swiping = false; acted = false; deletedStack = [];
+                        holdDelay.start();
+                    }
+                    onPositionChanged: function (mouse) {
+                        if (!pressed) return;
+                        const dx = mouse.x - startX;
+                        if (dx < -12) { holdDelay.stop(); swiping = true; }
+                        if (swiping) {
+                            const target = Math.max(0, Math.floor(-dx / win.wordSwipePx));
+                            while (wordsDeleted < target) {
+                                const s = win.deleteWord();
+                                if (!s.length) break;
+                                deletedStack.push(s); wordsDeleted++; acted = true;
+                            }
+                            while (wordsDeleted > target) {
+                                const s = deletedStack.pop();
+                                if (s === undefined) break;
+                                win.undoWord(s); wordsDeleted--;
+                            }
+                        }
+                    }
+                    onReleased: {
+                        holdDelay.stop(); charRepeat.stop();
+                        if (!acted) win.tapDeleteWord();
+                    }
+                }
+                Timer {
+                    id: holdDelay; interval: 420
+                    onTriggered: if (!bs.swiping) { win.deleteChar(); bs.acted = true; charRepeat.start() }
+                }
+                Timer { id: charRepeat; interval: 70; repeat: true; onTriggered: { win.deleteChar(); bs.acted = true } }
+            }
+        }
+
+        // ---------------- action row: same ten columns, same outer edges ----------------
+        Item {
+            id: actionRow
+            x: 0; y: win.chromeH + 3 * win.rowH
+            width: parent.width; height: win.actionH
+
+            Repeater {
+                model: [
+                    {g: "?123", from: 0.0, to: 1.5, act: "layer"},
+                    {g: ",",    from: 1.5, to: 2.5, act: "comma"},
+                    {g: "space",from: 2.5, to: 7.5, act: "space"},
+                    {g: ".",    from: 7.5, to: 8.5, act: "period"},
+                    {g: "⏎",    from: 8.5, to: 10.0, act: "enter"}
+                ]
+                Rectangle {
+                    x: modelData.from * win.u + win.kgap
+                    y: win.kgap
+                    width: (modelData.to - modelData.from) * win.u - 2 * win.kgap
+                    height: parent.height - 2 * win.kgap
+                    radius: win.krad
+                    color: modelData.act === "layer" && win.layer === "sym" ? pal.accent : pal.action
+                    Text {
+                        anchors.centerIn: parent
+                        text: modelData.act === "layer" && win.layer === "sym" ? "ABC" : modelData.g
+                        font.pixelSize: Math.max(8, win.actionH * (modelData.act === "space" || modelData.act === "layer" ? 0.34 : 0.48))
+                        color: modelData.act === "layer" && win.layer === "sym" ? pal.accentText : pal.actionText
+                    }
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (modelData.act === "layer")       win.layer = win.layer === "abc" ? "sym" : "abc";
+                            else if (modelData.act === "space")  win.tapSpace();
+                            else if (modelData.act === "enter")  win.tapEnter();
+                            else if (modelData.act === "comma")  win.tapPunct(",");
+                            else                                 win.tapPunct(".");
+                        }
+                    }
+                }
+            }
+        }
+
+        // swipe-delete gauge: one dot per deletable word, filling right-to-left.
+        Rectangle {
+            id: deleteGauge
+            visible: bs.swiping && win.availWords > 0
+            y: win.chromeH + 3 * win.rowH - height - win.kgap
+            x: parent.width - width - win.u * 0.3
+            width: Math.min(parent.width - win.u, win.u * 0.6 + win.availWords * win.u * 0.34)
+            height: win.rowH * 0.8; radius: win.krad
+            color: pal.committedBg; border.color: pal.accent; border.width: 2; z: 5
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left; anchors.leftMargin: win.u * 0.2
+                text: "−" + bs.wordsDeleted; color: pal.accentText
+                font.pixelSize: Math.max(8, win.u * 0.26); font.bold: true
+            }
+            Row {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.right: parent.right; anchors.rightMargin: win.u * 0.2
+                layoutDirection: Qt.RightToLeft; spacing: win.u * 0.12
+                Repeater {
+                    model: win.availWords
+                    Rectangle {
+                        width: win.u * 0.22; height: width; radius: width / 2
+                        color: index < bs.wordsDeleted ? pal.accent : "#6b7178"
+                    }
+                }
+            }
+        }
+
+        // ---------------- diagnostics (ADR-0004: opt-in, off by default) ----------------
+        Rectangle {
+            visible: win.showDiagnostics
+            x: 0; width: parent.width
+            height: win.chromeH * 0.8
+            y: parent.height - height
+            color: pal.committedBg; opacity: 0.94; z: 40
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left; anchors.leftMargin: win.u * 0.15
+                anchors.right: parent.right; anchors.rightMargin: win.u * 0.15
+                elide: Text.ElideRight
+                text: win.stateText() + "   ·   aspect " + win.letterAspect.toFixed(2)
+                      + "   ·   " + decoder.layoutId
+                      + "   ·   toggle: " + toggleListener.status
+                      + "   ·   preedit: " + (win.clientCaps < 0 ? "no caps reported"
+                            : (win.preeditSupported ? "YES" : "no") + " (caps 0x" + win.clientCaps.toString(16) + ")")
+                      + "   ·   out queue: " + injector.pending()
+                      + "   ·   target gen " + win.targetGen + (injector.focused() ? " (focused)" : " (no focus)")
+                      + "   ·   caret: " + (win.caretReports > 0
+                            ? win.caretRect.x + "," + win.caretRect.y + " ×" + win.caretReports
+                            : "never reported")
+                      + "   ·   ⌨ " + (win.injected.length ? win.injected.replace(/\s+$/, "") : "—")
+                      + "   ·   ptr L" + pointerSpeed.level
+                color: pal.committedText
+                font.pixelSize: Math.max(7, win.u * 0.20); font.family: "monospace"
+            }
+        }
+
+        // ---------------- history word → its own alternatives (spec §9.3) ----------------
+        MouseArea {   // click-away
+            anchors.fill: parent; visible: win.histOpen >= 0; z: 55
+            onClicked: win.histOpen = -1
+        }
+        Rectangle {
+            id: histPopup
+            readonly property var entry: win.histOpen >= 0 && win.histOpen < win.history.length
+                                         ? win.history[win.histOpen] : null
+            readonly property var alts: {
+                if (!entry) return [];
+                var a = [];
+                for (var i = 0; i < entry.cands.length && a.length < 4; i++)
+                    if (entry.cands[i].text !== entry.text) a.push(entry.cands[i].text);
+                return a;
+            }
+            visible: entry !== null; z: 56
+            x: Math.max(win.u * 0.1, Math.min(parent.width - width - win.u * 0.1, win.histOpenX))
+            y: win.chromeH
+            width: win.u * 2.6; height: histCol.height + win.u * 0.2
+            color: "#ffffff"; radius: Math.max(3, win.u * 0.12)
+            border.color: "#dadce0"; border.width: 1
+            Column {
+                id: histCol
+                x: 0; y: win.u * 0.1; width: parent.width
+                Repeater {
+                    // Alternatives from that word's own glide, then Delete. "Add to
+                    // dictionary" (spec §9.3) is deliberately absent: it needs the
+                    // personal dictionary (§10.2) to reach the decode lexicon, and
+                    // bumping a word the trie doesn't contain would do nothing.
+                    model: histPopup.alts.length + 1
+                    Rectangle {
+                        readonly property bool isDelete: index === histPopup.alts.length
+                        width: parent.width; height: win.u * 0.58
+                        color: hm.containsMouse ? pal.candBar : "#ffffff"
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            x: win.u * 0.18; width: parent.width - x * 2
+                            elide: Text.ElideRight
+                            text: parent.isDelete ? "Delete" : histPopup.alts[index]
+                            font.pixelSize: Math.max(8, win.u * 0.22)
+                            color: parent.isDelete ? "#c5221f" : pal.keyText
+                        }
+                        MouseArea {
+                            id: hm
+                            anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                const hi = win.histOpen;
+                                if (parent.isDelete) { win.deleteHistory(hi); return; }
+                                const old = win.history[hi].text;
+                                var nw = histPopup.alts[index];
+                                if (old.length && old[0] !== old[0].toLowerCase())
+                                    nw = nw.charAt(0).toUpperCase() + nw.substring(1);
+                                win.replaceHistory(hi, nw);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---------------- ⋯ menu ----------------
+        MouseArea {   // click-away
+            anchors.fill: parent; visible: win.menuOpen; z: 60
+            onClicked: win.menuOpen = false
+        }
+        Rectangle {
+            visible: win.menuOpen; z: 61
+            x: Math.min(parent.width - width - win.u * 0.1, win.u * 6.2)
+            y: win.chromeH
+            width: win.u * 3.7; height: menuCol.height + win.u * 0.2
+            color: "#ffffff"; radius: Math.max(3, win.u * 0.12)
+            border.color: "#dadce0"; border.width: 1
+            Column {
+                id: menuCol
+                x: 0; y: win.u * 0.1; width: parent.width
+                Repeater {
+                    model: [
+                        {g: "Small  · 440×220",  act: "s"},
+                        {g: "Medium · 560×280",  act: "m"},
+                        {g: "Large  · 720×360",  act: "l"},
+                        {g: "Hide completely",   act: "hide"},
+                        {g: "Avoid the caret",   act: "caret"},
+                        {g: "Pointer slow",      act: "ptr"},
+                        {g: "Diagnostics",       act: "diag"},
+                        {g: "Quit OpenGlide",    act: "quit"}
+                    ]
+                    Rectangle {
+                        readonly property bool disabled:
+                            (modelData.act === "hide" && !toggleListener.available)
+                            || (modelData.act === "ptr" && !pointerSpeed.available)
+                        width: parent.width; height: win.u * 0.62
+                        color: mi.containsMouse && !disabled ? pal.candBar : "#ffffff"
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            x: win.u * 0.22
+                            width: parent.width - x * 2
+                            elide: Text.ElideRight
+                            text: modelData.act === "caret" ? (win.avoidCaret ? "✓ " : "") + modelData.g
+                                     + (win.caretReports > 0 ? "" : " (app never reports)")
+                                  : modelData.act === "diag" && win.showDiagnostics ? "✓ " + modelData.g
+                                  : modelData.act === "hide" ? (toggleListener.available
+                                        ? "Hide · " + win.toggleGesture() + " to return"
+                                        : "Hide — needs /dev/input access")
+                                  : modelData.act === "ptr" ? (pointerSpeed.available
+                                        ? "Pointer slow: " + (pointerSpeed.level === 0 ? "off" : "L" + pointerSpeed.level)
+                                        : "Pointer slow — needs GNOME settings")
+                                  : modelData.g
+                            font.pixelSize: Math.max(8, win.u * 0.21)
+                            color: parent.disabled ? "#9aa0a6"
+                                   : modelData.act === "quit" ? "#c5221f" : pal.keyText
+                        }
+                        MouseArea {
+                            id: mi
+                            anchors.fill: parent; hoverEnabled: true
+                            cursorShape: parent.disabled ? Qt.ArrowCursor : Qt.PointingHandCursor
+                            onClicked: {
+                                if (parent.disabled) return;
+                                if (modelData.act === "s")         win.preset(440, 220);
+                                else if (modelData.act === "m")    win.preset(560, 280);
+                                else if (modelData.act === "l")    win.preset(720, 360);
+                                else if (modelData.act === "hide") win.hideCompletely();
+                                else if (modelData.act === "caret") {
+                                    win.avoidCaret = !win.avoidCaret;
+                                    settings.setValue("window/avoidCaret", win.avoidCaret);
+                                    win.menuOpen = false;
+                                }
+                                else if (modelData.act === "diag") { win.showDiagnostics = !win.showDiagnostics; win.menuOpen = false; }
+                                else if (modelData.act === "ptr") {
+                                    // Cycle slowdown 0→1→2→3→0; keep the menu open so the
+                                    // level is visible while the user dials it in.
+                                    pointerSpeed.level = (pointerSpeed.level + 1) % 4;
+                                    settings.setValue("pointer/level", pointerSpeed.level);
+                                    settings.sync();
+                                }
+                                else { win.persistGeometry(); Qt.quit(); }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
-    Rectangle {
-        id: committedBar
-        anchors.top: actionRow.bottom; anchors.topMargin: keySize * 0.06
-        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-        color: pal.committedBg
-        Text {
-            anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 12
-            text: "committed: " + (win.injected.length ? win.injected.replace(/\s+$/,"") : "—")
-            color: pal.committedText; font.pixelSize: keySize * 0.24; font.family: "monospace"
+    // ======================= resize ring =======================
+    // Deliberately NOT a full ring: the left/right strips stop at the chrome and
+    // action bands so they never overlap the outer edge of the letter block —
+    // grabbing a resize handle instead of starting a glide on Q or P would be a
+    // worse bug than the one this fixes. Corners and the top/bottom edges cover
+    // the rest; the stepper and presets are the primary path anyway.
+    Item {
+        visible: !win.collapsed
+        anchors.fill: parent
+        z: 80
+
+        MouseArea {   // top
+            x: 0; y: 0; width: parent.width; height: win.frame
+            cursorShape: Qt.SizeVerCursor
+            property real by: 0
+            property real bh: 0
+            property real s0y: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                by = windowCtl.posY(); bh = win.height;
+                s0y = windowCtl.posY() + mp.y;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                const d = (windowCtl.posY() + mp.y) - s0y;
+                win.moveTo(windowCtl.posX(), by + d);
+                win.sizeTo(win.width, bh - d);
+            }
+            onReleased: win.persistGeometry()
+        }
+        MouseArea {   // bottom
+            x: 0; y: parent.height - win.frame; width: parent.width; height: win.frame
+            cursorShape: Qt.SizeVerCursor
+            property real bh: 0
+            property real s0y: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                bh = win.height; s0y = windowCtl.posY() + mp.y;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                win.sizeTo(win.width, bh + (windowCtl.posY() + mp.y) - s0y);
+            }
+            onReleased: win.persistGeometry()
+        }
+        MouseArea {   // left, chrome band only
+            x: 0; y: win.frame; width: win.frame; height: win.chromeH
+            cursorShape: Qt.SizeHorCursor
+            property real bx: 0
+            property real bw: 0
+            property real s0x: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                bx = windowCtl.posX(); bw = win.width;
+                s0x = windowCtl.posX() + mp.x;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                const d = (windowCtl.posX() + mp.x) - s0x;
+                win.moveTo(bx + d, windowCtl.posY());
+                win.sizeTo(bw - d, win.height);
+            }
+            onReleased: win.persistGeometry()
+        }
+        MouseArea {   // left, action band only
+            x: 0; y: parent.height - win.frame - win.actionH; width: win.frame; height: win.actionH
+            cursorShape: Qt.SizeHorCursor
+            property real bx: 0
+            property real bw: 0
+            property real s0x: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                bx = windowCtl.posX(); bw = win.width;
+                s0x = windowCtl.posX() + mp.x;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                const d = (windowCtl.posX() + mp.x) - s0x;
+                win.moveTo(bx + d, windowCtl.posY());
+                win.sizeTo(bw - d, win.height);
+            }
+            onReleased: win.persistGeometry()
+        }
+        MouseArea {   // right, chrome band only
+            x: parent.width - win.frame; y: win.frame; width: win.frame; height: win.chromeH
+            cursorShape: Qt.SizeHorCursor
+            property real bw: 0
+            property real s0x: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                bw = win.width; s0x = windowCtl.posX() + mp.x;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                win.sizeTo(bw + (windowCtl.posX() + mp.x) - s0x, win.height);
+            }
+            onReleased: win.persistGeometry()
+        }
+        MouseArea {   // right, action band only
+            x: parent.width - win.frame; y: parent.height - win.frame - win.actionH
+            width: win.frame; height: win.actionH
+            cursorShape: Qt.SizeHorCursor
+            property real bw: 0
+            property real s0x: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                bw = win.width; s0x = windowCtl.posX() + mp.x;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                win.sizeTo(bw + (windowCtl.posX() + mp.x) - s0x, win.height);
+            }
+            onReleased: win.persistGeometry()
+        }
+
+        // corners — the discoverable grab targets, ≥16 px (ADR-0005 §4)
+        Repeater {
+            model: [
+                {cx: 0, cy: 0, e: Qt.TopEdge    | Qt.LeftEdge,  cur: Qt.SizeFDiagCursor},
+                {cx: 1, cy: 0, e: Qt.TopEdge    | Qt.RightEdge, cur: Qt.SizeBDiagCursor},
+                {cx: 0, cy: 1, e: Qt.BottomEdge | Qt.LeftEdge,  cur: Qt.SizeBDiagCursor},
+                {cx: 1, cy: 1, e: Qt.BottomEdge | Qt.RightEdge, cur: Qt.SizeFDiagCursor}
+            ]
+            MouseArea {
+                readonly property real sz: Math.max(16, win.frame * 3)
+                width: sz; height: sz
+                x: modelData.cx === 0 ? 0 : parent.width - sz
+                y: modelData.cy === 0 ? 0 : parent.height - sz
+                cursorShape: modelData.cur
+                property real bx: 0
+                property real by: 0
+                property real bw: 0
+                property real bh: 0
+                property real s0x: 0
+                property real s0y: 0
+                onPressed: function (mouse) {
+                    const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                    bx = windowCtl.posX(); by = windowCtl.posY();
+                    bw = win.width; bh = win.height;
+                    s0x = windowCtl.posX() + mp.x; s0y = windowCtl.posY() + mp.y;
+                }
+                onPositionChanged: function (mouse) {
+                    const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                    const dx = (windowCtl.posX() + mp.x) - s0x;
+                    const dy = (windowCtl.posY() + mp.y) - s0y;
+                    const left  = modelData.e & Qt.LeftEdge;
+                    const top   = modelData.e & Qt.TopEdge;
+                    win.moveTo(bx + (left ? dx : 0), by + (top ? dy : 0));
+                    win.sizeTo(bw + (left ? -dx : dx), bh + (top ? -dy : dy));
+                }
+                onReleased: win.persistGeometry()
+            }
+        }
+
+        // visible grip, bottom-right
+        Canvas {
+            width: Math.max(14, win.frame * 2.6); height: width
+            x: parent.width - width; y: parent.height - height
+            onPaint: {
+                const ctx = getContext("2d"); ctx.reset();
+                ctx.strokeStyle = pal.muted; ctx.lineWidth = 1;
+                for (let i = 1; i <= 3; i++) {
+                    ctx.beginPath();
+                    ctx.moveTo(width - i * (width / 4) - 1, height - 1);
+                    ctx.lineTo(width - 1, height - i * (height / 4) - 1);
+                    ctx.stroke();
+                }
+            }
         }
     }
 
@@ -345,7 +1357,8 @@ Window {
         target: decoder
         function onCandidatesReady(greedy, candidates, ms) {
             watchdog.stop();
-            win.greedyText = greedy; win.candidates = candidates; win.decMs = ms; win.pending = false; win.timedOut = false;
+            win.greedyText = greedy; win.candidates = candidates; win.decMs = ms;
+            win.pending = false; win.timedOut = false;
             if (candidates.length > 0) win.commitDecoded(candidates[0].text);
         }
         function onDecoderDied() {

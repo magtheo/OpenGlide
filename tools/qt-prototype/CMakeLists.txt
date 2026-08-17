@@ -11,6 +11,15 @@ qt_standard_project_setup()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(IBUS REQUIRED ibus-1.0)
 
+# ---- layer-shell (KDE/wlroots focus guarantee; optional — GNOME builds without) ----
+find_package(LayerShellQt QUIET)
+if (LayerShellQt_FOUND)
+    message(STATUS "LayerShellQt found: Wayland builds get keyboard-interactivity=none")
+else ()
+    message(STATUS "LayerShellQt NOT found: xcb-only focus semantics (fine on GNOME)")
+endif ()
+pkg_check_modules(GIO REQUIRED gio-2.0)
+
 # ---- native FUTO decoder: build ExecuTorch (XNNPACK — the .pte is delegated) ----
 set(EXECUTORCH_BUILD_XNNPACK          ON CACHE BOOL "" FORCE)
 set(EXECUTORCH_BUILD_EXTENSION_TENSOR  ON CACHE BOOL "" FORCE)
@@ -29,13 +38,21 @@ set(SPIKE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../native-decode-spike)
 
 qt_add_executable(openglide-qt
     src/main.cpp
+    src/windowctl.cpp src/windowctl.h
     src/swipesurface.cpp src/swipesurface.h
     src/decoderbridge.cpp src/decoderbridge.h
     src/injector.cpp src/injector.h
+    src/appsettings.cpp src/appsettings.h
+    src/togglelistener.cpp src/togglelistener.h
+    src/pointerspeed.cpp src/pointerspeed.h
     src/ibus_engine.c src/ibus_engine.h
     ${SPIKE_DIR}/swipe_engine.cpp ${SPIKE_DIR}/swipe_engine.h
 )
 qt_add_resources(openglide-qt "qml" PREFIX "/" FILES main.qml)
 
-target_include_directories(openglide-qt PRIVATE ${SPIKE_DIR} ${IBUS_INCLUDE_DIRS})
-target_link_libraries(openglide-qt PRIVATE Qt6::Core Qt6::Gui Qt6::Quick ${ET_LIBS} ${IBUS_LIBRARIES})
+target_include_directories(openglide-qt PRIVATE ${SPIKE_DIR} ${IBUS_INCLUDE_DIRS} ${GIO_INCLUDE_DIRS})
+target_link_libraries(openglide-qt PRIVATE Qt6::Core Qt6::Gui Qt6::Quick ${ET_LIBS} ${IBUS_LIBRARIES} ${GIO_LIBRARIES})
+if (LayerShellQt_FOUND)
+    target_link_libraries(openglide-qt PRIVATE LayerShellQt::Interface)
+    target_compile_definitions(openglide-qt PRIVATE OPENGLIDE_HAVE_LAYERSHELL)
+endif ()

@@ -168,6 +168,234 @@ Mechanism findings:
 ## Personalization — learn the user's words ✅
 `swipe_engine` keeps per-user word counts at `~/.local/share/openglide/user_freq.tsv` (loaded at startup). `decode` snapshots them under a mutex (`bump` runs on the UI thread) and adds `user_lambda·log(count+1)` (λ=2.0) before ranking — so words the user actually uses win ties over time. This is the right "learn common words": it learns the USER's vocabulary, sidestepping the help>hello problem that killed the generic frequency prior (the user teaches it "hello" by using/correcting it). Bumped on every glide commit + candidate correction (`decoder.bumpWord`); `bump()` saves immediately because SIGTERM/crash skips the dtor (so shutdown-only save would lose everything). Verified: persistence test (bump hello×2/world/good → file has `hello 2, world 1, good 1`); corpus still 94% (empty user_freq → no-op).
 
+## Letter-block aspect ratio — cliff at the tall end (re-run with the fixed model) ⚠️
+ADR-0005 made `u` (column) and `rowH` (row) independent so the window fills any
+shape, which unpinned the letter block from the 10:3 it was captured at. Run:
+`corpus_test … --sweep` (re-projects `corpus-controlled.jsonl`, 18 glides).
+
+**Result (2026-08-11): no cliff.** Top-1 was flat at **17/18 (94%)** — the corpus
+baseline — at every aspect from 10:5 (tall) to 10:1.8 (wide), i.e. k = 0.60 →
+1.67. Top-5 identical, latency flat at ~76 ms.
+
+| letter block | k | top-1 | top-5 | avg ms |
+|---|---|---|---|---|
+| 10:5.0 (tall) | 0.60 | 17 (94%) | 17 (94%) | 76.7 |
+| 10:4.0 | 0.75 | 17 (94%) | 17 (94%) | 75.4 |
+| 10:3.5 | 0.86 | 17 (94%) | 17 (94%) | 75.4 |
+| **10:3.0 (ref)** | 1.00 | **17 (94%)** | 17 (94%) | 75.7 |
+| 10:2.6 | 1.15 | 17 (94%) | 17 (94%) | 77.4 |
+| 10:2.2 | 1.37 | 17 (94%) | 17 (94%) | 76.3 |
+| 10:1.8 (wide) | 1.67 | 17 (94%) | 17 (94%) | 76.3 |
+
+The single miss is the same word at every aspect — the known too-short stroke, a
+dictionary/stroke issue, not a shape one.
+
+**Decision (line model — SUPERSEDED): resizing stays unclamped.** Re-run with the
+fixed word model found a cliff; see below.
+
+**⚠️ This run used the `line` model, which cannot see the dangerous case.**
+`--model line` scales the residual from a *locally straight* path, and trailing
+overshoot — the mechanism this very file identifies as the one that **corrupts**
+decode — is a smooth, low-frequency excursion, so a local fit follows it, calls
+it intended, and never amplifies it. The sweep was structurally blind to the
+failure it was looking for, which is the likeliest reason every row is identical
+to the digit.
+
+**`--model word` (now the default) fixes that** by decomposing against the
+polyline through the *target word's* key centres: overshoot lands past the end of
+that polyline, so it registers as deviation and does scale. Verified in
+`aspect_model_test.cpp` — at k=1.67 the word model amplifies a trailing overshoot
+**1.56×** and pushes more points out of bounds, where the line model leaves it at
+**1.00×**.
+
+**So the sweep above should be re-run** (`--sweep`, which now defaults to `word`).
+If it stays flat, the "no cliff" conclusion is real; if it does not, the resize
+band needs clamping after all.
+
+**Re-run 2026-08-11 with `--model word` (now the default): there IS a cliff, at the
+tall end.** Top-1 drops to **15/18 (83%) at 10:5.0 (k=0.60)** — the fixed model
+sees the trailing-overshoot amplification the line model was blind to — and holds
+**17/18 (94%) from 10:4.0 through 10:1.8 (wide)**.
+
+| letter block | k | top-1 (`word`) | top-1 (`line`, blind) |
+|---|---|---|---|
+| 10:5.0 (tall) | 0.60 | **15 (83%)** | 17 (94%) |
+| 10:4.0 | 0.75 | 17 (94%) | 17 (94%) |
+| 10:3.0 (ref) | 1.00 | 17 (94%) | 17 (94%) |
+| 10:1.8 (wide) | 1.67 | 17 (94%) | 17 (94%) |
+
+**Corrected decision: clamp the tall end.** The board must not get taller than
+~**10:4** (aspect ≥ ~2.5); the wide direction stays free (robust to 10:1.8).
+See ADR-0006 §F4.
+
+Remaining caveats either way: both models assume perfect re-aiming at the new key
+centres and unchanged speed, and the corpus is 18 glides from one writer. Real
+glides captured at 10:1.8 and 10:5 are what actually closes this.
+
+## Decode accuracy — data-drive baseline (2026-08-11) 🟡
+
+ADR-0006. The decoder was only ever scored on a controlled corpus; this measures
+real input.
+
+- **Controlled corpus** (`corpus-controlled.jsonl`, 18): top-1 **94% (17/18)**.
+  Strong recovery from messy greedy (`cpmpurer→computer`, `helo→hello`); the one
+  miss (`window`) was a truncated stroke, not decode.
+- **`corpus.jsonl` (26) is unreliable** — entries #2–6 (computer/party/glide/
+  open/plant) all decode to `river`; 600–770 points each but identical start/end
+  ~(0.35,0.17) → duplicated/mislabelled glides. Do not cite its 77%.
+- **Real glides (24, live capture):** clearly below 94%. Doubles held
+  (`god→good`, `helo→hello`), long words recovered from moderate mess
+  (`compiet→computer`, `keybiard→keyboard`). Misses: `coffee→code` ×3,
+  `because→bose` ×3, `mouse→mousse` ×2.
+
+**Failure taxonomy (the strategy hinges on this):**
+- **Rerank-able** — right word was a candidate, just not #1 (`mouse→mousse`,
+  mouse was 2nd). A context re-ranker fixes these.
+- **Decode-depth** — right word *absent* from top-5 (`coffee`, `because` on the
+  misses). No re-ranker can recover a buried word; needs decode/scoring work.
+
+→ ADR-0006: **decode depth first, then n-gram context rescoring** (the user's
+whole-text idea), both as probes. A standing real-glide number is not yet
+reported — needs a ≥30-word fresh corpus (the existing ones are too small/corrupt).
+
+## Committed-text deletion is not viable on GNOME Wayland via IBus (2026-08-11) ❌
+
+`ibus_engine_delete_surrounding_text` **SIGABRTs gnome-shell**
+(`org.gnome.Shell@wayland: status=6/ABRT`, core-dump) — reproduced on backspace
+3×; each crash took down the whole session ("locked out, all apps crashed"). No
+OOM, no fault in our process — the shell died.
+
+The NULL-surrounding-text hypothesis was **disproved**: declaring interest at
+enable + gating on `set_surrounding_text` still crashed (a glide commit triggers
+`set_surrounding_text`, so the gate let the delete through → crash). It is a
+deeper gnome-shell Wayland-IM bug.
+
+All three IBus deletion paths are dead here: `delete_surrounding_text` (crashes),
+`forward_key_event(BackSpace)` (clients don't apply it), and uinput (target-
+mismatched — hits the focused surface, not the IBus commit context, so
+inconsistent). **Backspace ships uinput-only** — non-crashing, works for the
+immediate glide-then-correct case, imprecise otherwise. Durable fix is a preedit
+model (current word stays uncommitted, so correcting it needs no deletion) —
+deferred; see ADR-0006 consequences.
+
+**Two consequences of the uinput-only backspace, fixed 2026-08-11:**
+- It needs ~17 ms of real sleeps per character (the compositor drops keystrokes
+  without them), and it ran on the **Qt UI thread**. Fine while correction only
+  touched the last word; recent-word correction (spec §9.3) deletes the word *and
+  retypes everything after it*, so correcting an early history entry is 70+
+  characters — **over a second of frozen keyboard**.
+- uinput writes land immediately while an IBus commit is queued onto the GLib
+  thread, so **"commit then backspace" could invert**: glide a word, tap ⌫ at
+  once, and the delete reaches the field before the word does.
+
+Both are the same root cause — output had no single owner (ADR-0003). All four
+ops (commit / commitExact / typeChar / backspace) now queue onto **one serialized
+worker thread** in submission order; the UI thread only enqueues. The worker uses
+a new `og_ibus_commit_sync` that waits for the GLib dispatch — fire-and-forget was
+the right fix at the wrong layer, and a dedicated output thread can afford to
+block, which is what buys back ordering against uinput.
+
+**Preedit support is now probed** (`set_capabilities` → `IBUS_CAP_PREEDIT_TEXT`).
+No behaviour change: the diagnostics overlay reports `preedit: YES/no (caps 0x…)`
+per focused client, plus the output-queue depth. Whether a preedit text model is
+worth building depends on what real apps declare — check a GTK field, a terminal
+and an Electron app before deciding.
+
+## KDE / Plasma 6 matrix row (2026-08-14, Fedora 44, second box) 🟡
+
+First hands-on on KDE: Plasma 6 Wayland, app forced to `QT_QPA_PLATFORM=xcb`
+per `run.sh`, 16-core laptop, uinput output path only.
+
+### Session IM state — no input method configured at all
+`[env] desktop=KDE session=wayland QT_IM_MODULE=(unset) GTK_IM_MODULE=(unset) XMODIFIERS=@im=none`
+(the `[env]` line was added in 6425926 for exactly this question). The running
+`ibus-daemon` is connected to nothing — so the app's in-process engine cannot
+bind (`not connected to ibus-daemon`) and this is **not an app bug**: the session
+never wired an IM. Path forward: Plasma System Settings → Keyboard → Virtual
+Keyboard → IBus, relogin, and only then does the bind failure become a real bug
+worth debugging. Fcitx5 backend (spec Phase 4) is the fallback architecture.
+
+### uinput fallback works end-to-end on KDE
+Glide → decode → commit landed in a focused konsole sink (`cat > /tmp/sink`):
+ground truth `help te` after a hello→help old-word correction plus a ⌫-hold.
+**Output-queue smoke test (3c6b226) PASSES on hardware**: old-word correction
+(delete word + suffix, retype) and a 2 s ⌫-hold — no freeze, no reordering.
+
+### Synthetic pointer injection is dead on Plasma 6 — test by hand
+Measured, in attempt order:
+- **XTEST FakeInput (pointer)**: extension present, events are a no-op — cursor
+  never moves. (Text injection via XTEST worked on the GNOME box; pointer does
+  not here.)
+- **uinput ABS pointer** (ABS_X/Y + BTN_LEFT): device creates, cursor never
+  moves — libinput does not support the generic absolute-pointer class.
+- **uinput tablet-pen** (BTN_TOOL_PEN + ABS): device creates, ignored by kwin.
+- **ydotool**: daemon running, but its device registers REL only (no EV_ABS) —
+  absolute moves silently do nothing. Relative events were observed on-device
+  but didn't move the cursor in the test window; abandoned as unreliable.
+- udev tags both virtual keyboards (`openglide-qt-injector`, ydotoold) with
+  `power-switch` (they register `KEY_POWER`); keyboard-event delivery works
+  regardless.
+Conclusion: automation on Plasma needs libei/portal work; manual driving is the
+reliable loop today.
+
+### Pointer slowdown is a no-op on KDE (and was a crash risk off-GNOME)
+It writes `org.gnome.desktop.peripherals.*`; no gnome-settings-daemon on KDE and
+kwin does not read them. Now schema-gated and default-off (6425926) — which also
+fixes the latent abort: `g_settings_new()` kills the process when the schema is
+absent, so the old default (level 2) hard-crashed any schema-less box on first
+window hover.
+
+### Real-glide latency + accuracy (anecdotal; ADR-0006 territory)
+Clean strokes decode in 20–60 ms; sloppy/long strokes hit 300–480 ms
+(`hwlo`/`helo`/`wltjf`/`testing` class) with one 1.7 s outlier (`tresitibg`).
+Accuracy under sloppy glides is mostly top-1 but re-glides happen (`cifr` ranked
+cir/cider above code until a cleaner pass). No decoder changes made on this box —
+this is the ADR-0006 corpus story, not a new signal.
+
+### Window focus + positioning on Plasma — the "nothing lands" chain, resolved by override-redirect (c156f5c)
+
+The uinput text that "stopped landing" after the IBus connect fix had a window
+cause, not a text cause: **kwin takes focus from a MANAGED xcb window on click
+whenever the previous target is a Wayland window** (WindowDoesNotAcceptFocus is
+an X hint that only protects X-to-X focus). Every glide's keystrokes went into
+the keyboard window itself. Same keyboard + XWayland sink = worked; same
+keyboard + Wayland sink = void — which is why it "worked before".
+
+Fix ladder, each rung measured:
+- **layer-shell** (`LayerShellQt`, Wayland QPA): keyboard-interactivity none
+  DOES fix focus — but **kwin freezes margins at surface creation**: no live
+  repositioning, `requestUpdate()` and resize-nudge commits do not move the
+  surface (screenshot-diff verified, 311/598/31k-pixel runs). wlroots applies
+  margin changes dynamically, so the code path stays for Sway/Hyprland.
+- **override-redirect on xcb** (`X11BypassWindowManagerHint`): an OR window is
+  unmanaged — `setX/setY` are authoritative (verified: window moves) and clicks
+  cannot activate anything (verified: text lands while pressing the keyboard).
+  This ships as the KDE default; no user configuration.
+- Two QML-side traps fixed along the way: `startSystemMove/Resize` needs a WM
+  (silent no-op on OR/layer-shell) → manual drag/resize throughout; and
+  **`QCursor::pos()` returns SURFACE-RELATIVE coordinates on Qt Wayland** —
+  mixing it with global math clamps every drag to (0,0). Deltas now derive from
+  `posX() + mapToItem(mouse)`.
+
+Shipping matrix (run.sh + WindowCtl): GNOME = managed xcb (unchanged, the
+long-verified path) · KDE = xcb + override-redirect · wlroots = layer-shell
+Wayland (untested on hardware). `OPENGLIDE_QPA` and `OPENGLIDE_OR=0/1` override.
+
+A kwin window rule ("accept focus: no") was trialled during diagnosis and
+REJECTED: per-user configuration is not a shipping solution; it was deleted.
+Screenshot-diff via `spectacle` + numpy is the standing technique for
+compositor-behaviour questions that have no queryable state.
+
+### Chip coherence (user-reported in the wild) — fixed by 6425926, hardware pass pending
+Stale words from an earlier target appeared in the chrome slots after switching
+targets mid-session; root cause: history validates against the app's mirror, and
+the uinput path has no focus signal. 6425926 stamps entries with a target
+generation (IBus `focus_in`/`focus_out` where available) plus age caps
+(`staleMs`: 20 s on the uinput fallback, 5 min with IBus); non-live entries
+leave the slots and all edit paths refuse stale entries. Logic suite: 85
+assertions (passing on the dev box; `node` absent on the KDE box — install to
+re-run locally).
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make
@@ -187,5 +415,5 @@ Record per cell: did the string land **exactly**? did focus stay on the target?
 
 ## Blocking follow-ups
 1. **IBus backend** (`libibus-dev`, sudo) to actually witness UTF-8 commit land in GNOME apps — the one unverified cell on this machine.
-2. **Sway / Hyprland / KDE sessions** to fill the remaining matrix rows (input-method-v2 + layer-shell).
+2. **Sway / Hyprland / KDE sessions** — KDE measured 2026-08-14 (see the KDE section above); Sway/Hyprland remain open (input-method-v2 + layer-shell).
 3. Qt6 dev install for the Qt UI wrapper (optional, later).

@@ -1,0 +1,36 @@
+{
+  "layout_id": "en_qwerty_v1",
+  "language": "en",
+  "schema_version": 1,
+  "_note": "Single source of truth for glide key geometry (spec §7.2, ADR-0005). Consumed by SwipeEngine::set_layout() AND by the QML keyboard, so the keys the decoder scores against are always the keys on screen. Centers are normalized to the LETTER BLOCK (not the window): x over its full width, y over its three rows. Order below is visual (reading order), not alphabetical — the engine re-indexes by label.",
+  "keys": [
+    { "label": "q", "x": 0.05, "y": 0.167 },
+    { "label": "w", "x": 0.15, "y": 0.167 },
+    { "label": "e", "x": 0.25, "y": 0.167 },
+    { "label": "r", "x": 0.35, "y": 0.167 },
+    { "label": "t", "x": 0.45, "y": 0.167 },
+    { "label": "y", "x": 0.55, "y": 0.167 },
+    { "label": "u", "x": 0.65, "y": 0.167 },
+    { "label": "i", "x": 0.75, "y": 0.167 },
+    { "label": "o", "x": 0.85, "y": 0.167 },
+    { "label": "p", "x": 0.95, "y": 0.167 },
+
+    { "label": "a", "x": 0.10, "y": 0.500 },
+    { "label": "s", "x": 0.20, "y": 0.500 },
+    { "label": "d", "x": 0.30, "y": 0.500 },
+    { "label": "f", "x": 0.40, "y": 0.500 },
+    { "label": "g", "x": 0.50, "y": 0.500 },
+    { "label": "h", "x": 0.60, "y": 0.500 },
+    { "label": "j", "x": 0.70, "y": 0.500 },
+    { "label": "k", "x": 0.80, "y": 0.500 },
+    { "label": "l", "x": 0.90, "y": 0.500 },
+
+    { "label": "z", "x": 0.20, "y": 0.833 },
+    { "label": "x", "x": 0.30, "y": 0.833 },
+    { "label": "c", "x": 0.40, "y": 0.833 },
+    { "label": "v", "x": 0.50, "y": 0.833 },
+    { "label": "b", "x": 0.60, "y": 0.833 },
+    { "label": "n", "x": 0.70, "y": 0.833 },
+    { "label": "m", "x": 0.80, "y": 0.833 }
+  ]
+}

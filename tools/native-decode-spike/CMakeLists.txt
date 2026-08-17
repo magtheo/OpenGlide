@@ -34,3 +34,9 @@ target_link_libraries(corpus_test PRIVATE swipe_engine)
 # 4. personalization persistence test (bump -> save -> file)
 add_executable(test_userfreq test_userfreq.cpp)
 target_link_libraries(test_userfreq PRIVATE swipe_engine)
+
+# Aspect-model unit test — header-only, no ExecuTorch, no model, no dictionary.
+add_executable(aspect_model_test aspect_model_test.cpp)
+
+# Double-letter arithmetic unit test — header-only, no ExecuTorch.
+add_executable(doubling_test doubling_test.cpp)
