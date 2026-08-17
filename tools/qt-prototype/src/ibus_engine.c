@@ -14,7 +14,12 @@
 #include "ibus_engine.h"
 
 #include <ibus.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <signal.h>
+#include <unistd.h>
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <glib-object.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -250,6 +255,15 @@ static gpointer ibus_thread(gpointer arg) {
 
     ibus_init();
     g_bus = ibus_bus_new();
+    /* ibus_bus_new() connects ASYNCHRONOUSLY — the socket only completes while a
+     * GLib main context iterates, and the loop below starts only after this
+     * check. is_connected() immediately after bus_new() is therefore FALSE by
+     * construction; whatever box printed "connected" won a race. Pump this
+     * thread's context until the async connect lands, bounded (~2 s) so a dead
+     * daemon still falls through to uinput quickly. */
+    for (int i = 0; i < 200 && !ibus_bus_is_connected(g_bus); i++) {
+        if (!g_main_context_iteration(g_ctx, FALSE)) g_usleep(10000);
+    }
     if (!ibus_bus_is_connected(g_bus)) {
         fprintf(stderr, "[openglide-ibus] not connected to ibus-daemon (uinput only)\n");
         return NULL;
@@ -292,7 +306,51 @@ static gpointer ibus_thread(gpointer arg) {
     return NULL;
 }
 
+/* KDE/kwin launches ibus-daemon through ibus-wayland WITH a DISPLAY set, so the
+ * daemon writes the X-style address file (<machine-id>-unix-0). Clients living in
+ * a Wayland session (WAYLAND_DISPLAY set) look for the wayland-style file
+ * instead — stale or absent here — and ibus_get_address() returns NULL, so no
+ * bus, ever. Resolve it ourselves: scan the bus dir, keep the newest file whose
+ * IBUS_DAEMON_PID is still alive, and pin IBUS_ADDRESS (documented to override
+ * file resolution). Verified against the live daemon on Plasma 6, 2026-08-17. */
+static void og_resolve_ibus_address(void) {
+    if (g_getenv("IBUS_ADDRESS") != NULL) return;          /* user pinned it */
+    gchar *dir = g_build_filename(g_get_user_config_dir(), "ibus", "bus", NULL);
+    GDir *d = g_dir_open(dir, 0, NULL);
+    if (!d) { g_free(dir); return; }
+    const gchar *name;
+    gchar *best = NULL; gint64 best_mtime = 0;
+    while ((name = g_dir_read_name(d)) != NULL) {
+        gchar *path = g_build_filename(dir, name, NULL);
+        gchar *buf = NULL;
+        if (g_file_get_contents(path, &buf, NULL, NULL)) {
+            gint64 mtime = 0;
+            GPid pid = 0; gchar *addr = NULL;
+            for (gchar *line = strtok(buf, "\n"); line; line = strtok(NULL, "\n")) {
+                if (g_str_has_prefix(line, "IBUS_ADDRESS="))
+                    { g_free(addr); addr = g_strdup(line + strlen("IBUS_ADDRESS=")); }
+                else if (sscanf(line, "IBUS_DAEMON_PID=%d", &pid) == 1) {}
+            }
+            GStatBuf st;
+            if (g_stat(path, &st) == 0) mtime = (gint64)st.st_mtim.tv_sec;
+            /* Only trust entries whose daemon still exists (kill 0 = ESRV check). */
+            if (addr && pid > 0 && (kill((pid_t)pid, 0) == 0 || errno == EPERM)
+                && mtime > best_mtime) {
+                g_free(best); best = addr; addr = NULL; best_mtime = mtime;
+            } else g_free(addr);
+        }
+        g_free(buf); g_free(path);
+    }
+    g_dir_close(d); g_free(dir);
+    if (best) {
+        g_setenv("IBUS_ADDRESS", best, TRUE);
+        fprintf(stderr, "[openglide-ibus] pinned IBUS_ADDRESS from live bus file\n");
+        g_free(best);
+    }
+}
+
 bool og_ibus_start(void) {
+    og_resolve_ibus_address();
     g_ctx = g_main_context_new();
     return g_thread_new("openglide-ibus", ibus_thread, NULL) != NULL;
 }

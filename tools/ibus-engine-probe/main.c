@@ -89,7 +89,12 @@ int main(int argc, char **argv) {
     if (argc > 1 && argv[1][0]) g_text = argv[1];
 
     ibus_init();
+    fprintf(stderr, "[probe] address ibus picked: %s\n", ibus_get_address());
     g_bus = ibus_bus_new();
+    /* pump the default context: bus_new() connects async */
+    for (int i = 0; i < 200 && !ibus_bus_is_connected(g_bus); i++) {
+        if (!g_main_context_iteration(NULL, FALSE)) g_usleep(10000);
+    }
     if (!ibus_bus_is_connected(g_bus)) {
         fprintf(stderr, "[openglide-probe] not connected to ibus-daemon\n");
         return 3;
