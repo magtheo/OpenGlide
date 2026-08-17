@@ -33,11 +33,20 @@ signals:
     void tapped(qreal nx, qreal ny);
     // live normalized-unclamped cursor during a glide (for key-pop UI); same frame as swipeCompleted
     void cursorMoved(qreal nx, qreal ny);
+    // Cursor position while NOT gliding, so the UI can show which key a press
+    // would start on. A mouse cursor does not lift between words the way a
+    // finger does, and RESULTS.md ("Start-position hypothesis — CONFIRMED")
+    // measures the cost: dict top-1 goes 81% -> 94% once each glide begins on
+    // the target's first letter. Same normalized frame as cursorMoved.
+    void hoverMoved(qreal nx, qreal ny);
+    void hoverLeft();
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void hoverMoveEvent(QHoverEvent *event) override;
+    void hoverLeaveEvent(QHoverEvent *event) override;
 
 private:
     struct P { float x, y, t; };

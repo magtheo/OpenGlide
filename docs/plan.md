@@ -173,6 +173,35 @@ settles the layout, resize, and visibility model. Ordered work:
    landed text captured through a `cat > file` sink (`help te`). See RESULTS.md
    (KDE section).
 
+10. ~~**Visible state + start-position cue**~~ ✅ (2026-08-17, from the
+    [UX & visual review](ux-and-visual-review.md) — findings F1/F2/F3/F9, items
+    B1/B2/B3/B9). Three things the window could not previously say:
+    - **A state pill** in the chrome. `decoding…`, `loading decoder… N s`,
+      `busy — glide again`, `too short — glide further`, `decode stalled`,
+      `decoder stopped`. All six states already existed and all six rendered in
+      exactly ONE place — the ADR-0004 diagnostics line, off by default — so a
+      480 ms decode, a dropped glide and a decoder that never loaded were
+      indistinguishable from a working keyboard doing nothing. Structure only, no
+      payload, so it sits on the permitted side of ADR-0004 §1.
+    - **Refused glides resolve.** `DecoderBridge::decode` returns a bool; both
+      refusal paths (engine not ready, stale-discard) used to leave `pending` set
+      with nothing to clear it — 20 s of dead keyboard ending in an invisible
+      message. One exit point (`glideFinished`), every branch resolving.
+    - **The parked key is highlighted** between glides (`hoverMoved` on
+      `SwipeSurface`). This is the first thing built against the measured
+      start-position finding (RESULTS.md: dict top-1 **81% → 94%** when the glide
+      starts on the target's first letter) — until now nothing in the UI guided
+      it, and the letter keys had no hover state at all. A ring, not the glide's
+      fill-and-scale; restored from the stroke's last point on release.
+    - Plus: disabled ⋯ entries name the fix on a second line instead of only
+      stating what is missing.
+
+    Verified: `tools/qml-logic-test` now runs two suites — the history/text model
+    (85 assertions) and a new **state suite** (41) covering the glide-outcome
+    rule and the note precedence order. The state suite was mutation-checked
+    against the pre-fix logic: 10 failures, including `pending` left set on both
+    refusal paths. **Not** compiled or rendered — this box has no Qt.
+
 > ⚠️ Steps 0–2 are **built and tested on hardware** (magtheo, 2026-08-11) — plus a
 > follow-up fix there: `og_ibus_backspace` was blocking the UI thread up to 500 ms
 > per delete, which piled up under hold-⌫ repeat and froze the session. First made

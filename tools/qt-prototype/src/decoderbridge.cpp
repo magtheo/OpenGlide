@@ -158,11 +158,13 @@ void DecoderBridge::bumpWord(const QString &word) {
     if (m_eng) m_eng->bump(word.toStdString());
 }
 
-void DecoderBridge::decode(const QVariantList &points) {
-    if (!m_ready || !m_eng) return;
+bool DecoderBridge::decode(const QVariantList &points) {
+    if (!m_ready || !m_eng) return false;
     // Stale-discard (ADR-0003): drop a new glide if a decode is still running.
+    // Report the drop rather than swallowing it — the caller has no other way
+    // to learn that no candidatesReady() is coming.
     bool expected = false;
-    if (!m_busy.compare_exchange_strong(expected, true)) return;
+    if (!m_busy.compare_exchange_strong(expected, true)) return false;
 
     std::vector<SwipePoint> pts;
     pts.reserve(points.size());
@@ -196,4 +198,5 @@ void DecoderBridge::decode(const QVariantList &points) {
             emit candidatesReady(g, ql, ms);
         }, Qt::QueuedConnection);
     }).detach();
+    return true;
 }

@@ -43,6 +43,32 @@ target app (spec §17) — confirmed on XWayland.
   exact (~1.8× faster than per-word scoring).
 - **Tap-to-type**: a tap (press, <5% movement) types the nearest key; a drag
   glides. They coexist on one surface (`src/swipesurface.{h,cpp}`).
+- **The app says what it is doing.** A state pill in the chrome shows `decoding…`,
+  `loading decoder… N s`, `busy — glide again`, `too short — glide further`,
+  `decode stalled — glide again`, `decoder stopped — restart`. Every one of these
+  states existed before and rendered in exactly ONE place — the opt-in
+  diagnostics line — so by default a 480 ms decode, a dropped glide and a decoder
+  that never loaded all looked identical: nothing happening. The pill borrows the
+  two leftmost chip slots (candidates are always empty while it shows, and the
+  slots fill oldest-first) and the slots never shift. The strings carry no typed
+  text, no candidate, no geometry — structure only, which is the side of the
+  ADR-0004 §1 line that is explicitly allowed. Transient notes expire after 2.6 s.
+- **Refused glides resolve instead of hanging.** `DecoderBridge::decode` now
+  returns a bool: FALSE means the glide was refused (engine not ready, or a decode
+  already running — ADR-0003 stale-discard) and no `candidatesReady` is coming.
+  Both paths used to set `pending` and then discover the refusal, leaving the UI
+  waiting on a signal that never arrived: 20 s of dead keyboard ending in an
+  invisible message. `glideFinished()` is now the single exit point and every
+  branch leaves a state that resolves.
+- **The key under the cursor is highlighted between glides** (`hoverMoved` /
+  `hoverLeft` on `SwipeSurface`). A finger lifts; a mouse cursor stays where the
+  last word left it, and RESULTS.md ("Start-position hypothesis — CONFIRMED")
+  measures the cost of starting a glide on the wrong key: dict top-1 81% → 94%
+  once each glide begins on the target's first letter. Deliberately a **ring**,
+  not the fill-and-scale a glide uses — "you are here" and "the glide is crossing
+  here" are different facts. The ring is restored from the stroke's last point on
+  release, so it does not blank after every tap. Shift, ⌫, the action row and the
+  symbols layer get the same ring on hover.
 - **Double-letter recovery**: the glide passes a doubled key once (greedy emits
   single — god, helo), so candidates equal to the greedy with one letter doubled
   (good, hello) get +4.5 nats. (A frequency prior was tried but rejected: "help"
@@ -140,6 +166,9 @@ target app (spec §17) — confirmed on XWayland.
   `/dev/input/event*` (group `input`); without it the Hide entry is disabled and
   says why, because hiding with no way back is the same trap as a one-click quit.
   Mode (`chord`/`middle`/`mouse4`/`mouse5`) and timings are read from settings.
+  A disabled ⋯ entry now carries a **second line naming the fix** ("add yourself
+  to the 'input' group") rather than only stating what is unavailable — a greyed
+  row that explains nothing is a dead end.
 - **Shift + symbols**: shift cycles off/once/lock; `?123` swaps in a symbols layer
   on the same three-row grid (tap-only — gliding is disabled there). Note the
   uinput fallback can only type ASCII it has evdev codes for; the symbols layer

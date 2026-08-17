@@ -25,8 +25,13 @@ public:
     QVariantList keys() const { return m_keys; }
     QString layoutId() const { return m_layoutId; }
 
-    // points: [{x,y,t}, ...] with t in ms. Returns via candidatesReady().
-    Q_INVOKABLE void decode(const QVariantList &points);
+    // points: [{x,y,t}, ...] with t in ms. Results arrive via candidatesReady().
+    // Returns TRUE if a worker was launched — i.e. candidatesReady() will fire.
+    // Returns FALSE if the glide was refused (engine not ready, or a decode is
+    // still running and this one is stale-discarded per ADR-0003). The caller
+    // MUST distinguish: a refused glide emits nothing, so treating it as
+    // pending leaves the UI waiting on a signal that will never arrive.
+    Q_INVOKABLE bool decode(const QVariantList &points);
     // Personalization: record that the user used/chose `word` (boosts it in future decodes).
     Q_INVOKABLE void bumpWord(const QString &word);
 

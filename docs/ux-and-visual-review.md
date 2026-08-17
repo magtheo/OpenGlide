@@ -1,7 +1,11 @@
 # OpenGlide — UX & visual review
 
 **Status:** Analysis + brainstorm (not a decision — nothing here is settled;
-candidates for ADR-0007 and the Phase 2 §7 "remaining" list are marked ★)
+candidates for ADR-0007 and the Phase 2 "remaining" list are marked ★)
+**Implemented so far:** step 1 of §4 — **B1, B2, B3, B9** landed 2026-08-17
+(plan.md Phase 2 item 10), closing **F1, F2, F3** and the menu half of **F8**.
+Logic-tested (`tools/qml-logic-test`, 85 + 41 assertions), not yet compiled or
+rendered — the box it was written on has no Qt.
 **Date:** 2026-08-17
 **Subject:** `tools/qt-prototype` @ `83d40cd` — `main.qml` (1369 lines) and the
 C++ items it drives.

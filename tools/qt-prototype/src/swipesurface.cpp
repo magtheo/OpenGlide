@@ -1,10 +1,18 @@
 #include "swipesurface.h"
+#include <QHoverEvent>
 #include <QMouseEvent>
 #include <QLineF>
 
 SwipeSurface::SwipeSurface(QQuickItem *parent) : QQuickItem(parent) {
     setAcceptedMouseButtons(Qt::LeftButton);
     setKeepMouseGrab(true);   // keep the grab through the whole glide
+    // Hover is not decoration here: it is the only way the user can see which
+    // key a glide would START on, which RESULTS.md measures as the difference
+    // between 81% and 94% dict top-1. Hover reaches a window that never takes
+    // keyboard focus — the chrome's own controls already highlight on
+    // containsMouse across every shipped window mode (managed xcb, override-
+    // redirect, layer-shell), so the delivery path is proven, not assumed.
+    setAcceptHoverEvents(true);
 }
 
 void SwipeSurface::addPoint(const QPointF &local, qint64 dtMs) {
@@ -15,6 +23,22 @@ void SwipeSurface::addPoint(const QPointF &local, qint64 dtMs) {
     p.t = float(dtMs);
     m_pts.push_back(p);
     emit cursorMoved(p.x, p.y);
+}
+
+void SwipeSurface::hoverMoveEvent(QHoverEvent *event) {
+    event->accept();
+    // During a glide the key highlight belongs to cursorMoved (which reports
+    // unclamped points, including outside the surface); two writers on one
+    // highlight would fight.
+    if (m_swiping) return;
+    const qreal w = width(), h = height();
+    emit hoverMoved((w > 0) ? event->position().x() / w : 0.0,
+                    (h > 0) ? event->position().y() / h : 0.0);
+}
+
+void SwipeSurface::hoverLeaveEvent(QHoverEvent *event) {
+    event->accept();
+    emit hoverLeft();
 }
 
 void SwipeSurface::mousePressEvent(QMouseEvent *event) {

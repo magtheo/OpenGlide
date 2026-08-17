@@ -40,6 +40,7 @@ Window {
         readonly property color actionText: "#3c4043"
         readonly property color accent: "#1a73e8"
         readonly property color accentText: "#ffffff"
+        readonly property color notice: "#a8500a"      // retryable problem states
         readonly property color candBar: "#f1f3f4"
         readonly property color muted: "#5f6368"
         readonly property color committedBg: "#202124"
@@ -100,6 +101,7 @@ Window {
     property bool   pending: false
     property bool   lastShort: false
     property bool   timedOut: false
+    property bool   dropped: false      // glide refused because a decode was already running
     // Recent-word history (spec §9.3). Each entry remembers where the word sits
     // in `injected` and the candidate list its glide produced, so ANY of the last
     // few words can still be corrected in one click — not just the newest one,
@@ -179,7 +181,12 @@ Window {
     }
     property bool   decoderDead: false
     property string injected: ""
-    property string activeKey: ""
+    property string activeKey: ""       // key under the cursor DURING a glide
+    // Key the cursor is resting on between glides. A finger lifts; a mouse
+    // cursor stays wherever the last word left it, so without this the user has
+    // no way to see where the next glide would begin — and RESULTS.md measures
+    // that as the difference between 81% and 94% dict top-1.
+    property string parkedKey: ""
     property int    warmupSecs: 0
     property bool   ibusActive: false
     property bool   ibusTextCapable: false
@@ -208,12 +215,81 @@ Window {
         {l: "?", c: "?", x: 0.80, y: 0.833}
     ]
 
+    // ================= what the machine is doing =================
+    // Until now every one of these states rendered in exactly ONE place: the
+    // opt-in diagnostics line. So by default a 480 ms decode, a glide dropped by
+    // the stale-discard guard, and a decoder that never loaded all looked
+    // identical — nothing happening — and the only state that ever reached the
+    // user was the word itself, or its absence.
+    //
+    // These strings are STRUCTURE, not content: no typed text, no candidate, no
+    // geometry. That is the line ADR-0004 §1 draws, and it explicitly permits
+    // this side of it ("stage timings, backend selection, errors, focus/
+    // visibility transitions" — never payloads). Keep it that way: never put a
+    // decoded word in here.
+    //
+    // Pure function of the state, with the state passed IN: the precedence order
+    // is the whole content of this decision (a dead decoder outranks a stalled
+    // decode outranks a short stroke), so it is worth testing on its own, and a
+    // pure function is testable on a box with no Qt (tools/qml-logic-test).
+    // Explicit arguments also make the binding's dependencies visible.
+    function noteState(dead, ready, drop, pend, short, stall, secs) {
+        if (dead)   return {text: "decoder stopped — restart",   problem: true};
+        if (!ready) return {text: "loading decoder… " + secs + " s", problem: false};
+        if (drop)   return {text: "busy — glide again",           problem: true};
+        if (pend)   return {text: "decoding…",                    problem: false};
+        if (short)  return {text: "too short — glide further",    problem: true};
+        if (stall)  return {text: "decode stalled — glide again", problem: true};
+        return {text: "", problem: false};
+    }
+    readonly property var note: noteState(decoderDead, decoder.ready, dropped,
+                                          pending, lastShort, timedOut, warmupSecs)
+    readonly property string stateNote: note.text
+    // Waiting vs. something-went-wrong. Only the colour and the icon differ, but
+    // the distinction is the whole point: "decoding…" asks for patience, the
+    // rest ask for another glide.
+    readonly property bool noteIsProblem: note.problem
+
+    // Transient notes must expire or they become furniture. `lastShort` in
+    // particular used to be cleared only by the next full-length glide — which
+    // was harmless while it was invisible and would have made it permanent now.
+    Timer {
+        id: noteTimer
+        interval: 2600
+        onTriggered: { win.lastShort = false; win.timedOut = false; win.dropped = false }
+    }
+    function noteShort() {              // a stroke too short to decode
+        lastShort = true; pending = false; candidates = [];
+        noteTimer.restart();
+    }
+
+    // What to do with a finished glide. Every exit must leave the UI in a state
+    // that RESOLVES: this used to set `pending` first and only then check whether
+    // the decoder would take the glide, so both refusal paths — engine not ready,
+    // and a decode already running (stale-discard, ADR-0003) — left `pending`
+    // true with nothing to clear it. That is 20 s of dead keyboard ending in a
+    // message that rendered only in diagnostics. Returns the outcome so the rule
+    // can be asserted without Qt.
+    function glideFinished(points) {
+        if (points.length < 4) { noteShort(); return "short"; }
+        lastShort = false;
+        candidates = [];
+        // The pill already says "loading decoder…" — don't also claim to be
+        // decoding something.
+        if (!decoder.ready) return "notready";
+        timedOut = false; dropped = false;
+        if (!decoder.decode(points)) {
+            pending = false; dropped = true;
+            noteTimer.restart();
+            return "dropped";
+        }
+        pending = true;
+        watchdog.restart();
+        return "decoding";
+    }
+
     function stateText() {
-        if (decoderDead) return "decoder stopped — restart the app";
-        if (!decoder.ready) return "loading decoder… (" + warmupSecs + " s)";
-        if (lastShort) return "(too short — glide across more keys)";
-        if (pending) return "decoding…";
-        if (timedOut) return "decode stalled — glide again";
+        if (stateNote.length) return stateNote;
         if (candidates.length === 0) return "focus a text editor, then glide a word here";
         return `top-1 “${candidates[0].text}” (greedy “${greedyText}”, ${decMs.toFixed(0)} ms)`;
     }
@@ -561,7 +637,10 @@ Window {
     Timer {
         id: watchdog
         interval: 20000; repeat: false
-        onTriggered: if (win.pending) { win.pending = false; win.timedOut = true; win.candidates = [] }
+        onTriggered: if (win.pending) {
+            win.pending = false; win.timedOut = true; win.candidates = [];
+            noteTimer.restart();
+        }
     }
 
     // ======================= COLLAPSED: the puck =======================
@@ -663,6 +742,59 @@ Window {
                 color: win.ibusActive ? pal.accent : pal.muted
             }
 
+            // ---- state pill: what the machine is doing, in the user's line of sight ----
+            // It takes the two LEFTMOST chip slots, which is the cheapest pair to
+            // borrow: candidates are always empty while a note is showing, and the
+            // slots fill oldest-first, so the two it covers are the two least
+            // useful recent words. The slots do not shift — a chip that moves is
+            // a chip you have to re-find (ADR-0005 §1) — they just yield.
+            Rectangle {
+                id: statePill
+                visible: win.stateNote.length > 0
+                x: win.u * 0.36; y: parent.height * 0.14
+                width: win.u * 3.20; height: parent.height * 0.72
+                radius: height / 2
+                color: "transparent"
+                border.color: win.noteIsProblem ? pal.notice : pal.accent
+                border.width: 1
+                Item {
+                    id: noteIcon
+                    x: win.u * 0.22; width: win.u * 0.20; height: width
+                    anchors.verticalCenter: parent.verticalCenter
+                    Rectangle {          // waiting — pulses
+                        anchors.centerIn: parent
+                        width: win.u * 0.16; height: width; radius: width / 2
+                        visible: !win.noteIsProblem
+                        color: pal.accent
+                        // `from` is set on both legs so a restart always begins
+                        // at full opacity — an "animation on property" keeps its
+                        // last value when it stops, and a dot stuck at 0.25
+                        // would read as a third, meaningless state.
+                        SequentialAnimation on opacity {
+                            running: statePill.visible && !win.noteIsProblem
+                            loops: Animation.Infinite
+                            NumberAnimation { from: 1.0; to: 0.25; duration: 520; easing.type: Easing.InOutSine }
+                            NumberAnimation { from: 0.25; to: 1.0; duration: 520; easing.type: Easing.InOutSine }
+                        }
+                    }
+                    Text {               // problem — steady
+                        anchors.centerIn: parent
+                        visible: win.noteIsProblem
+                        text: "!"; color: pal.notice; font.bold: true
+                        font.pixelSize: Math.max(8, win.u * 0.26)
+                    }
+                }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    x: win.u * 0.54
+                    width: parent.width - x - win.u * 0.18
+                    elide: Text.ElideRight
+                    text: win.stateNote
+                    color: win.noteIsProblem ? pal.notice : pal.accent
+                    font.pixelSize: Math.max(8, win.u * 0.23)
+                }
+            }
+
             // FIXED slots — same word, same place, every glide. Candidates when
             // they are fresh, recent words otherwise (see chromeSlots).
             Repeater {
@@ -675,7 +807,11 @@ Window {
                     x: win.u * (0.36 + index * 1.63); y: parent.height * 0.14
                     width: win.u * 1.57; height: parent.height * 0.72
                     radius: height / 2
-                    visible: slot !== null
+                    // The two left slots yield to the state pill while it shows.
+                    // An undo offer lands in slot 0, so a note briefly hides it —
+                    // it comes back on its own when the note expires, since both
+                    // are bindings and the 8 s undo window outlives the 2.6 s note.
+                    visible: slot !== null && !(win.stateNote.length > 0 && index < 2)
                     color: isTop ? pal.accent : (isHist || isUndo ? "transparent" : "#ffffff")
                     border.color: isUndo ? pal.accent : (isHist ? pal.muted : "#dadce0")
                     border.width: isTop ? 0 : (isUndo ? 2 : 1)
@@ -752,12 +888,19 @@ Window {
             Repeater {
                 model: win.layer === "abc" ? decoder.keys : []
                 Rectangle {
+                    // Parked = the cursor is resting here, so this is where the
+                    // next glide would START. Deliberately a RING, not the fill
+                    // and scale the glide uses: "you are here" and "the glide is
+                    // crossing here" are different facts and must not look alike.
+                    readonly property bool parked: modelData.l === win.parkedKey && !surface.swiping
                     x: modelData.x * kb.width - win.u / 2 + win.kgap
                     y: modelData.y * kb.height - win.rowH / 2 + win.kgap
                     width:  win.u - 2 * win.kgap
                     height: win.rowH - 2 * win.kgap
                     radius: win.krad
                     color: modelData.l === win.activeKey ? pal.keyPop : pal.key
+                    border.color: pal.accent
+                    border.width: parked ? Math.max(1, win.u * 0.05) : 0
                     z: modelData.l === win.activeKey ? 1 : 0
                     transformOrigin: Item.Center
                     Behavior on scale { NumberAnimation { duration: 70; easing.type: Easing.OutCubic } }
@@ -782,6 +925,11 @@ Window {
                     height: win.rowH - 2 * win.kgap
                     radius: win.krad
                     color: sym.pressed ? pal.keyPop : pal.key
+                    // Same "you are here" ring as the letter layer — this layer
+                    // is tap-only, so knowing what you are about to hit matters
+                    // just as much and there is no glide trail to tell you.
+                    border.color: pal.accent
+                    border.width: sym.containsMouse ? Math.max(1, win.u * 0.05) : 0
                     Text {
                         anchors.centerIn: parent; text: modelData.l
                         font.bold: true
@@ -791,6 +939,7 @@ Window {
                     MouseArea {
                         id: sym
                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        hoverEnabled: true
                         onClicked: {
                             injector.typeChar(modelData.c);
                             win.injected += modelData.c;
@@ -832,24 +981,33 @@ Window {
                     pathCanvas.pts.push({x: nx, y: ny});
                     pathCanvas.requestPaint();
                 }
+                // Between glides: show which key a press would start on.
+                onHoverMoved: function (nx, ny) {
+                    const k = win.nearestKey(nx, ny);
+                    win.parkedKey = k ? k.l : "";
+                }
+                onHoverLeft: win.parkedKey = ""
                 onSwipingChanged: {
                     if (swiping) {
+                        win.parkedKey = "";       // the glide owns the highlight now
                         pathFade.stop();
                         pathCanvas.opacity = 1;
                         pathCanvas.pts = [];
                         pathCanvas.requestPaint();
                     } else {
                         win.activeKey = "";
+                        // The cursor is now parked wherever the stroke ended, so
+                        // show that at once. Waiting for the next hover event
+                        // would blank the ring after every tap until the user
+                        // happened to move — and "where does the next glide
+                        // start" is exactly the question at that moment.
+                        const p = pathCanvas.pts.length ? pathCanvas.pts[pathCanvas.pts.length - 1] : null;
+                        const k = p ? win.nearestKey(p.x, p.y) : null;
+                        win.parkedKey = k ? k.l : "";
                         pathFade.restart();
                     }
                 }
-                onSwipeCompleted: function (points) {
-                    if (points.length < 4) { win.lastShort = true; win.pending = false; win.candidates = []; return; }
-                    win.lastShort = false;
-                    win.candidates = []; win.pending = true; win.timedOut = false;
-                    watchdog.restart();
-                    if (decoder.ready) decoder.decode(points);
-                }
+                onSwipeCompleted: function (points) { win.glideFinished(points) }
                 onTapped: function (nx, ny) {
                     const k = win.nearestKey(nx, ny);
                     if (!k) return;
@@ -869,13 +1027,20 @@ Window {
                 width: 1.5 * win.u - 2 * win.kgap; height: win.rowH - 2 * win.kgap
                 radius: win.krad
                 color: win.shiftState === 2 ? pal.accent : (win.shiftState === 1 ? pal.keyPop : pal.action)
+                border.color: pal.accent
+                border.width: sh.containsMouse ? Math.max(1, win.u * 0.05) : 0
                 Text {
                     anchors.centerIn: parent
                     text: win.shiftState === 2 ? "⇪" : "⇧"
                     font.pixelSize: Math.max(10, Math.min(win.u, win.rowH) * 0.50)
                     color: win.shiftState === 2 ? pal.accentText : pal.actionText
                 }
-                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.cycleShift() }
+                MouseArea {
+                    id: sh
+                    anchors.fill: parent; hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: win.cycleShift()
+                }
             }
 
             Rectangle {
@@ -884,6 +1049,8 @@ Window {
                 width: 1.5 * win.u - 2 * win.kgap; height: win.rowH - 2 * win.kgap
                 radius: win.krad
                 color: bs.pressed ? pal.actionHold : pal.action
+                border.color: pal.accent
+                border.width: bs.containsMouse ? Math.max(1, win.u * 0.05) : 0
                 Text {
                     anchors.centerIn: parent; text: "⌫"
                     font.pixelSize: Math.max(10, Math.min(win.u, win.rowH) * 0.50); color: pal.actionText
@@ -898,6 +1065,7 @@ Window {
                 MouseArea {
                     id: bs
                     anchors.fill: parent
+                    hoverEnabled: true
                     property real startX
                     property int  wordsDeleted
                     property bool swiping
@@ -959,6 +1127,8 @@ Window {
                     height: parent.height - 2 * win.kgap
                     radius: win.krad
                     color: modelData.act === "layer" && win.layer === "sym" ? pal.accent : pal.action
+                    border.color: pal.accent
+                    border.width: am.containsMouse ? Math.max(1, win.u * 0.05) : 0
                     Text {
                         anchors.centerIn: parent
                         text: modelData.act === "layer" && win.layer === "sym" ? "ABC" : modelData.g
@@ -966,7 +1136,9 @@ Window {
                         color: modelData.act === "layer" && win.layer === "sym" ? pal.accentText : pal.actionText
                     }
                     MouseArea {
-                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        id: am
+                        anchors.fill: parent; hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             if (modelData.act === "layer")       win.layer = win.layer === "abc" ? "sym" : "abc";
                             else if (modelData.act === "space")  win.tapSpace();
@@ -1108,7 +1280,7 @@ Window {
             visible: win.menuOpen; z: 61
             x: Math.min(parent.width - width - win.u * 0.1, win.u * 6.2)
             y: win.chromeH
-            width: win.u * 3.7; height: menuCol.height + win.u * 0.2
+            width: win.u * 4.6; height: menuCol.height + win.u * 0.2
             color: "#ffffff"; radius: Math.max(3, win.u * 0.12)
             border.color: "#dadce0"; border.width: 1
             Column {
@@ -1129,26 +1301,48 @@ Window {
                         readonly property bool disabled:
                             (modelData.act === "hide" && !toggleListener.available)
                             || (modelData.act === "ptr" && !pointerSpeed.available)
-                        width: parent.width; height: win.u * 0.62
+                        // A greyed-out row that only says what it CAN'T do is a
+                        // dead end — the user is told a feature exists, told they
+                        // may not have it, and given nothing to act on. The second
+                        // line is the way out, so it names the actual fix.
+                        readonly property string hint:
+                              (modelData.act === "hide" && !toggleListener.available)
+                                  ? "add yourself to the 'input' group"
+                            : (modelData.act === "ptr" && !pointerSpeed.available)
+                                  ? "needs the GNOME peripherals schema"
+                            : (modelData.act === "caret" && win.caretReports === 0)
+                                  ? "this app never reports its caret"
+                            : ""
+                        width: parent.width
+                        height: hint.length ? win.u * 0.92 : win.u * 0.62
                         color: mi.containsMouse && !disabled ? pal.candBar : "#ffffff"
-                        Text {
+                        Column {
                             anchors.verticalCenter: parent.verticalCenter
                             x: win.u * 0.22
                             width: parent.width - x * 2
-                            elide: Text.ElideRight
-                            text: modelData.act === "caret" ? (win.avoidCaret ? "✓ " : "") + modelData.g
-                                     + (win.caretReports > 0 ? "" : " (app never reports)")
-                                  : modelData.act === "diag" && win.showDiagnostics ? "✓ " + modelData.g
-                                  : modelData.act === "hide" ? (toggleListener.available
-                                        ? "Hide · " + win.toggleGesture() + " to return"
-                                        : "Hide — needs /dev/input access")
-                                  : modelData.act === "ptr" ? (pointerSpeed.available
-                                        ? "Pointer slow: " + (pointerSpeed.level === 0 ? "off" : "L" + pointerSpeed.level)
-                                        : "Pointer slow — needs GNOME settings")
-                                  : modelData.g
-                            font.pixelSize: Math.max(8, win.u * 0.21)
-                            color: parent.disabled ? "#9aa0a6"
-                                   : modelData.act === "quit" ? "#c5221f" : pal.keyText
+                            spacing: win.u * 0.04
+                            Text {
+                                width: parent.width
+                                elide: Text.ElideRight
+                                text: modelData.act === "caret" ? (win.avoidCaret ? "✓ " : "") + modelData.g
+                                      : modelData.act === "diag" && win.showDiagnostics ? "✓ " + modelData.g
+                                      : modelData.act === "hide" && toggleListener.available
+                                            ? "Hide · " + win.toggleGesture() + " to return"
+                                      : modelData.act === "ptr" && pointerSpeed.available
+                                            ? "Pointer slow: " + (pointerSpeed.level === 0 ? "off" : "L" + pointerSpeed.level)
+                                      : modelData.g
+                                font.pixelSize: Math.max(8, win.u * 0.21)
+                                color: parent.parent.disabled ? "#9aa0a6"
+                                       : modelData.act === "quit" ? "#c5221f" : pal.keyText
+                            }
+                            Text {
+                                visible: parent.parent.hint.length > 0
+                                width: parent.width
+                                elide: Text.ElideRight
+                                text: parent.parent.hint
+                                font.pixelSize: Math.max(7, win.u * 0.165)
+                                color: pal.muted
+                            }
                         }
                         MouseArea {
                             id: mi
@@ -1359,6 +1553,10 @@ Window {
             watchdog.stop();
             win.greedyText = greedy; win.candidates = candidates; win.decMs = ms;
             win.pending = false; win.timedOut = false;
+            // A glide refused while this one was in flight left a "busy" note
+            // behind; the word landing is the answer to it, so clear it rather
+            // than letting it sit there contradicting the fresh candidates.
+            win.dropped = false;
             if (candidates.length > 0) win.commitDecoded(candidates[0].text);
         }
         function onDecoderDied() {
