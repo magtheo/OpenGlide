@@ -23,6 +23,7 @@ bool og_ibus_connected(void);
 /* OpenGlide is the active IME with a focused input context (a commit will land
  * in the focused field via IBus). */
 bool og_ibus_active(void);
+bool og_ibus_text_capable(void);   /* false where the bridge drops commits (kwin) */
 
 /* Commit NUL-terminated UTF-8 to the focused field via ibus_engine_commit_text.
  * Fire-and-forget: queues on the GLib thread and returns at once, so it can never

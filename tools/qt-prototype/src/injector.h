@@ -26,6 +26,7 @@ public:
     Q_INVOKABLE void typeChar(const QString &ch);
     // OpenGlide is the active IME -> commits route via IBus (UTF-8); else uinput fallback.
     Q_INVOKABLE bool ibusActive() const;
+    Q_INVOKABLE bool ibusTextCapable() const;
     // Does the focused client support preedit (current word left uncommitted)?
     // -1 capabilities = nothing ever reported. See ibus_engine.h.
     Q_INVOKABLE bool preeditSupported() const;

@@ -6,9 +6,11 @@
 #include <cstdio>
 #include <execinfo.h>
 #include <QQuickWindow>
+#include <QTimer>
 #include <QSocketNotifier>
 #include <sys/socket.h>
 #include "pointerspeed.h"
+#include "windowctl.h"
 #include "swipesurface.h"
 #include "decoderbridge.h"
 #include "injector.h"
@@ -80,15 +82,22 @@ int main(int argc, char *argv[]) {
                      settings.value("toggle/holdMs", 300).toInt());
     toggle.start();
 
+    WindowCtl windowCtl;   // layer-shell attach + WM-independent move/resize
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("decoder", &decoder);
     engine.rootContext()->setContextProperty("injector", &injector);
     engine.rootContext()->setContextProperty("settings", &settings);
     engine.rootContext()->setContextProperty("toggleListener", &toggle);
     engine.rootContext()->setContextProperty("pointerSpeed", &pointerSpeed);
+    engine.rootContext()->setContextProperty("windowCtl", &windowCtl);
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
     if (engine.rootObjects().isEmpty())
         return -1;
+    if (auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().first())) {
+        windowCtl.attach(w);   // surface config BEFORE the first commit …
+        w->show();             // … and only now commit it (see main.qml note)
+    }
 
     // SIGTERM/SIGINT → clean quit so the destructors run and restore BOTH the
     // user's IBus engine (Injector::~Injector) and their pointer speeds

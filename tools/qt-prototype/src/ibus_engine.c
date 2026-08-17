@@ -357,6 +357,31 @@ bool og_ibus_start(void) {
 bool og_ibus_connected(void) { return g_atomic_int_get(&g_connected) != 0; }
 bool og_ibus_active(void)    { return g_atomic_pointer_get(&g_engine) != NULL; }
 
+/* Text DELIVERY capability — deliberately distinct from connection/active.
+ * kwin's ibus-wayland bridge enables engines (focus lifecycle events flow) but
+ * does NOT deliver unsolicited commit_text to apps: verified 2026-08-17 on
+ * Plasma 6 with the standalone probe — enable fired, commit_text sent, nothing
+ * landed in a Wayland-native field. GNOME's shell delivers (ADR-0002's verified
+ * path). Text ops must consult THIS, not og_ibus_active(); signals (target
+ * generation, caret) may still flow on kwin. OPENGLIDE_TEXT_BACKEND=ibus|uinput
+ * overrides the desktop guess for testing on either side. */
+bool og_ibus_text_capable(void) {
+    static int capable = -1;            /* resolved once per process */
+    if (capable < 0) {
+        const char *force = g_getenv("OPENGLIDE_TEXT_BACKEND");
+        if (force && g_strcmp0(force, "ibus") == 0)        capable = 1;
+        else if (force && g_strcmp0(force, "uinput") == 0) capable = 0;
+        else {
+            const char *d = g_getenv("XDG_CURRENT_DESKTOP");
+            capable = (d && strstr(d, "KDE") != NULL) ? 0 : 1;
+        }
+        if (capable == 0)
+            fprintf(stderr, "[openglide-ibus] this session's IM bridge can't deliver "
+                            "commits — text routes via uinput; IBus is signals-only\n");
+    }
+    return capable != 0;
+}
+
 /* Heap-allocated + FIRE-AND-FORGET: g_main_context_invoke is asynchronous here, so
  * the job must outlive the caller's stack frame — the idle frees it. Never blocks
  * the Qt/UI thread: on the slow T460s a stalled GLib thread let the old ≤0.5 s

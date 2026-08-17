@@ -55,8 +55,19 @@ if [[ ! -x "$BIN" ]]; then
     exit 1
 fi
 
+# Platform: wlroots compositors get layer-shell Wayland (keyboard-interactivity
+# none; margins are dynamic there). GNOME/mutter has no layer-shell: managed xcb
+# (WindowDoesNotAcceptFocus honored - the long-verified path). KDE/kwin: xcb +
+# override-redirect - kwin freezes layer-shell margins at surface creation (no
+# dragging) and steals focus from MANAGED xcb windows when the target is a
+# Wayland window; an OR window is unmanaged on both counts (verified 2026-08-17).
+# OPENGLIDE_QPA overrides the platform; OPENGLIDE_OR=0/1 overrides the OR flag.
 : "${DISPLAY:=:0}"
 : "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
-export DISPLAY XDG_RUNTIME_DIR QT_QPA_PLATFORM=xcb
+case "${XDG_CURRENT_DESKTOP:-}" in
+    *Sway*|*sway*|*Hyprland*|*hyprland*|*niri*|*river*) : "${OPENGLIDE_QPA:=wayland}" ;;
+    *)                                                  : "${OPENGLIDE_QPA:=xcb}" ;;
+esac
+export DISPLAY XDG_RUNTIME_DIR QT_QPA_PLATFORM="${OPENGLIDE_QPA}"
 echo "==> launching openglide-qt..."
 exec "$BIN" "$@"

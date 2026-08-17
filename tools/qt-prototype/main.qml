@@ -18,7 +18,11 @@ import OpenGlide 1.0
 Window {
     id: win
     width: 560; height: 280
-    visible: true
+    // Shown from main.cpp AFTER the layer-shell surface is configured: the
+    // surface type (layer vs xdg-toplevel) is fixed at first commit, and QML
+    // visible:true would commit a plain toplevel before WindowCtl::attach ran
+    // ("Cannot set shell integration while there's already a shell surface").
+    visible: false
     flags: Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus | Qt.FramelessWindowHint
     color: hidden ? "transparent" : pal.shell
     minimumWidth:  collapsed ? 1 : 320
@@ -58,6 +62,18 @@ Window {
     // clamped to it yet — this is surfaced in diagnostics so the measurement has
     // something to read.
     readonly property real letterAspect: rowH > 0 ? contentW / (3 * rowH) : 0
+
+    // ---- manual move/resize (works without a WM role: layer-shell margins or
+    // plain x/y on xcb — startSystemMove/Resize needs a WM and is a silent no-op
+    // on layer-shell) ----
+    function moveTo(x, y) {
+        win.x = Math.max(0, x); win.y = Math.max(0, y);
+        windowCtl.move(win.x, win.y);
+    }
+    function sizeTo(w, h) {
+        win.width = Math.max(win.minimumWidth, w);
+        win.height = Math.max(win.minimumHeight, h);
+    }
 
     // ---- window state ----
     property bool collapsed: false
@@ -112,7 +128,10 @@ Window {
     //     (KDE/Fcitx, no IME focus signal at all). Deliberately much shorter
     //     there: with no way to know the target changed, old is the only proxy.
     property int  targetGen: 0
-    readonly property int staleMs: ibusActive ? 300000 : 20000
+    // The 5-min cap trusts per-focus generation events; on kwin the bridge
+    // enables once and may never re-fire, so the short cap stays unless the
+    // bridge is GNOME-grade (text-capable is the proxy for that).
+    readonly property int staleMs: (ibusActive && ibusTextCapable) ? 300000 : 20000
     function entryLive(e) {
         return e !== null && e !== undefined
             && e.gen === targetGen
@@ -163,6 +182,7 @@ Window {
     property string activeKey: ""
     property int    warmupSecs: 0
     property bool   ibusActive: false
+    property bool   ibusTextCapable: false
     readonly property int availWords: injected.length ? injected.replace(/^\s+|\s+$/g, "").split(/\s+/).filter(function (w) { return w.length; }).length : 0
     // Leftward travel per deleted word — one column, so the gesture feels the
     // same at every window size (it used to be a fixed 60 px).
@@ -198,7 +218,7 @@ Window {
         return `top-1 “${candidates[0].text}” (greedy “${greedyText}”, ${decMs.toFixed(0)} ms)`;
     }
     Timer { interval: 1000; repeat: true; running: !decoder.ready && win.visible; onTriggered: win.warmupSecs += 1 }
-    Timer { interval: 800; repeat: true; running: win.visible; onTriggered: win.ibusActive = injector.ibusActive() }
+    Timer { interval: 800; repeat: true; running: win.visible; onTriggered: { win.ibusActive = injector.ibusActive(); win.ibusTextCapable = injector.ibusTextCapable() } }
 
     // ================= caret avoidance =================
     // The focused app reports where its text cursor is (IBus set_cursor_location).
@@ -516,8 +536,8 @@ Window {
             settings.setValue("window/width", width);
             settings.setValue("window/height", height);
         }
-        settings.setValue("window/x", x);
-        settings.setValue("window/y", y);
+        settings.setValue("window/x", windowCtl.posX());
+        settings.setValue("window/y", windowCtl.posY());
         settings.sync();
     }
     Timer { id: saveGeom; interval: 600; onTriggered: win.persistGeometry() }
@@ -532,7 +552,7 @@ Window {
         if (w > 0 && h > 0) { win.width = Math.max(320, w); win.height = Math.max(170, h); }
         const sx = parseInt(settings.value("window/x", -1));
         const sy = parseInt(settings.value("window/y", -1));
-        if (sx >= 0 && sy >= 0) { win.x = sx; win.y = sy; }
+        if (sx >= 0 && sy >= 0) { win.x = sx; win.y = sy; windowCtl.move(sx, sy); }
         win.expandedW = win.width; win.expandedH = win.height;
         win.avoidCaret = settings.value("window/avoidCaret", true) !== false
                       && String(settings.value("window/avoidCaret", true)) !== "false";
@@ -572,14 +592,23 @@ Window {
             property real px: 0
             property real py: 0
             property bool moved: false
+            property real bx: 0
+            property real by: 0
+            property real s0x: 0
+            property real s0y: 0
             onPressed: function (mouse) {
                 px = mouse.x; py = mouse.y; moved = false;
-                if (mouse.button === Qt.RightButton) win.startSystemMove();
+                bx = windowCtl.posX(); by = windowCtl.posY();
+                s0x = windowCtl.posX() + mouse.x; s0y = windowCtl.posY() + mouse.y;
             }
             onPositionChanged: function (mouse) {
                 if (!moved && Math.abs(mouse.x - px) + Math.abs(mouse.y - py) > 6) {
                     moved = true;
-                    win.startSystemMove();
+                }
+                if (moved && pressed) {
+                    const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                    const gx = windowCtl.posX() + mp.x, gy = windowCtl.posY() + mp.y;
+                    win.moveTo(bx + gx - s0x, by + gy - s0y);
                 }
             }
             onClicked: function (mouse) { if (!moved && mouse.button === Qt.LeftButton) win.expand() }
@@ -601,8 +630,32 @@ Window {
             x: 0; y: 0; width: parent.width; height: win.chromeH
             color: pal.candBar
 
-            // Any chrome that is not a control is a drag handle.
-            MouseArea { anchors.fill: parent; onPressed: win.startSystemMove() }
+            // Any chrome that is not a control is a drag handle. Deltas come
+            // from the seat-global cursor (windowCtl), not item-relative mouse
+            // coords — the window moves under the cursor while dragging, which
+            // makes item-relative deltas self-referential (drag cancels itself).
+            MouseArea {
+                anchors.fill: parent
+                // Screen-space cursor = our logical window position + the
+                // event's surface-relative offset. QCursor::pos() is NOT usable
+                // here: on Qt Wayland it returns surface-relative coordinates,
+                // and mixing spaces clamps every drag to (0,0).
+                property real bx: 0
+                property real by: 0
+                property real s0x: 0
+                property real s0y: 0
+                onPressed: function (mouse) {
+                    const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                    bx = windowCtl.posX(); by = windowCtl.posY();
+                    s0x = windowCtl.posX() + mp.x; s0y = windowCtl.posY() + mp.y;
+                }
+                onPositionChanged: function (mouse) {
+                    const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                    const gx = windowCtl.posX() + mp.x, gy = windowCtl.posY() + mp.y;
+                    win.moveTo(bx + gx - s0x, by + gy - s0y);
+                }
+                onReleased: win.persistGeometry()
+            }
 
             Rectangle {   // IME status dot
                 x: win.u * 0.10; width: win.u * 0.18; height: width; radius: width / 2
@@ -1143,33 +1196,105 @@ Window {
         MouseArea {   // top
             x: 0; y: 0; width: parent.width; height: win.frame
             cursorShape: Qt.SizeVerCursor
-            onPressed: win.startSystemResize(Qt.TopEdge)
+            property real by: 0
+            property real bh: 0
+            property real s0y: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                by = windowCtl.posY(); bh = win.height;
+                s0y = windowCtl.posY() + mp.y;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                const d = (windowCtl.posY() + mp.y) - s0y;
+                win.moveTo(windowCtl.posX(), by + d);
+                win.sizeTo(win.width, bh - d);
+            }
+            onReleased: win.persistGeometry()
         }
         MouseArea {   // bottom
             x: 0; y: parent.height - win.frame; width: parent.width; height: win.frame
             cursorShape: Qt.SizeVerCursor
-            onPressed: win.startSystemResize(Qt.BottomEdge)
+            property real bh: 0
+            property real s0y: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                bh = win.height; s0y = windowCtl.posY() + mp.y;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                win.sizeTo(win.width, bh + (windowCtl.posY() + mp.y) - s0y);
+            }
+            onReleased: win.persistGeometry()
         }
         MouseArea {   // left, chrome band only
             x: 0; y: win.frame; width: win.frame; height: win.chromeH
             cursorShape: Qt.SizeHorCursor
-            onPressed: win.startSystemResize(Qt.LeftEdge)
+            property real bx: 0
+            property real bw: 0
+            property real s0x: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                bx = windowCtl.posX(); bw = win.width;
+                s0x = windowCtl.posX() + mp.x;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                const d = (windowCtl.posX() + mp.x) - s0x;
+                win.moveTo(bx + d, windowCtl.posY());
+                win.sizeTo(bw - d, win.height);
+            }
+            onReleased: win.persistGeometry()
         }
         MouseArea {   // left, action band only
             x: 0; y: parent.height - win.frame - win.actionH; width: win.frame; height: win.actionH
             cursorShape: Qt.SizeHorCursor
-            onPressed: win.startSystemResize(Qt.LeftEdge)
+            property real bx: 0
+            property real bw: 0
+            property real s0x: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                bx = windowCtl.posX(); bw = win.width;
+                s0x = windowCtl.posX() + mp.x;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                const d = (windowCtl.posX() + mp.x) - s0x;
+                win.moveTo(bx + d, windowCtl.posY());
+                win.sizeTo(bw - d, win.height);
+            }
+            onReleased: win.persistGeometry()
         }
         MouseArea {   // right, chrome band only
             x: parent.width - win.frame; y: win.frame; width: win.frame; height: win.chromeH
             cursorShape: Qt.SizeHorCursor
-            onPressed: win.startSystemResize(Qt.RightEdge)
+            property real bw: 0
+            property real s0x: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                bw = win.width; s0x = windowCtl.posX() + mp.x;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                win.sizeTo(bw + (windowCtl.posX() + mp.x) - s0x, win.height);
+            }
+            onReleased: win.persistGeometry()
         }
         MouseArea {   // right, action band only
             x: parent.width - win.frame; y: parent.height - win.frame - win.actionH
             width: win.frame; height: win.actionH
             cursorShape: Qt.SizeHorCursor
-            onPressed: win.startSystemResize(Qt.RightEdge)
+            property real bw: 0
+            property real s0x: 0
+            onPressed: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                bw = win.width; s0x = windowCtl.posX() + mp.x;
+            }
+            onPositionChanged: function (mouse) {
+                const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                win.sizeTo(bw + (windowCtl.posX() + mp.x) - s0x, win.height);
+            }
+            onReleased: win.persistGeometry()
         }
 
         // corners — the discoverable grab targets, ≥16 px (ADR-0005 §4)
@@ -1186,7 +1311,28 @@ Window {
                 x: modelData.cx === 0 ? 0 : parent.width - sz
                 y: modelData.cy === 0 ? 0 : parent.height - sz
                 cursorShape: modelData.cur
-                onPressed: win.startSystemResize(modelData.e)
+                property real bx: 0
+                property real by: 0
+                property real bw: 0
+                property real bh: 0
+                property real s0x: 0
+                property real s0y: 0
+                onPressed: function (mouse) {
+                    const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                    bx = windowCtl.posX(); by = windowCtl.posY();
+                    bw = win.width; bh = win.height;
+                    s0x = windowCtl.posX() + mp.x; s0y = windowCtl.posY() + mp.y;
+                }
+                onPositionChanged: function (mouse) {
+                    const mp = mapToItem(win.contentItem, mouse.x, mouse.y);
+                    const dx = (windowCtl.posX() + mp.x) - s0x;
+                    const dy = (windowCtl.posY() + mp.y) - s0y;
+                    const left  = modelData.e & Qt.LeftEdge;
+                    const top   = modelData.e & Qt.TopEdge;
+                    win.moveTo(bx + (left ? dx : 0), by + (top ? dy : 0));
+                    win.sizeTo(bw + (left ? -dx : dx), bh + (top ? -dy : dy));
+                }
+                onReleased: win.persistGeometry()
             }
         }
 

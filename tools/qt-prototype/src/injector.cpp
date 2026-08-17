@@ -61,19 +61,19 @@ void Injector::runOp(const Op &op) {
     switch (op.kind) {
     case Op::Commit: {
         const QString withSep = op.text + QChar(' ');   // trailing separator (spec §9.2)
-        if (og_ibus_active() && og_ibus_commit_sync(withSep.toUtf8().constData(), 500)) return;
+        if (og_ibus_text_capable() && og_ibus_active() && og_ibus_commit_sync(withSep.toUtf8().constData(), 500)) return;
         if (m_fd < 0 && !setup()) return;
         for (const QChar qc : op.text) rawType(QString(qc));
         rawType(" ");
         return;
     }
     case Op::CommitExact:
-        if (og_ibus_active() && og_ibus_commit_sync(op.text.toUtf8().constData(), 500)) return;
+        if (og_ibus_text_capable() && og_ibus_active() && og_ibus_commit_sync(op.text.toUtf8().constData(), 500)) return;
         if (m_fd < 0 && !setup()) return;
         for (const QChar qc : op.text) rawType(QString(qc));
         return;
     case Op::TypeChar:
-        if (og_ibus_active() && og_ibus_commit_sync(op.text.toUtf8().constData(), 500)) return;
+        if (og_ibus_text_capable() && og_ibus_active() && og_ibus_commit_sync(op.text.toUtf8().constData(), 500)) return;
         rawType(op.text);
         return;
     case Op::Backspace: {
@@ -134,7 +134,10 @@ void Injector::emitKey(int code, int val) {
 
 bool Injector::setup() {
     m_fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
-    if (m_fd < 0) return false;
+    if (m_fd < 0) {
+        fprintf(stderr, "[injector] /dev/uinput open failed: %s\n", strerror(errno));
+        return false;
+    }
     ioctl(m_fd, UI_SET_EVBIT, EV_KEY);
     int keys[] = {
         KEY_A,KEY_B,KEY_C,KEY_D,KEY_E,KEY_F,KEY_G,KEY_H,KEY_I,KEY_J,KEY_K,KEY_L,KEY_M,
@@ -148,9 +151,11 @@ bool Injector::setup() {
     us.id.bustype = BUS_USB; us.id.vendor = 0x8888; us.id.product = 0x0002; us.id.version = 1;
     strncpy(us.name, "openglide-qt-injector", UINPUT_MAX_NAME_SIZE);
     if (ioctl(m_fd, UI_DEV_SETUP, &us) < 0 || ioctl(m_fd, UI_DEV_CREATE) < 0) {
+        fprintf(stderr, "[injector] uinput device create failed: %s\n", strerror(errno));
         close(m_fd); m_fd = -1; return false;
     }
     msleep(300);
+    fprintf(stderr, "[injector] uinput keyboard ready (text will land as raw keys)\n");
     return true;
 }
 
@@ -190,6 +195,7 @@ bool Injector::commitExact(const QString &s) {
 }
 
 bool Injector::ibusActive() const { return og_ibus_active(); }
+bool Injector::ibusTextCapable() const { return og_ibus_text_capable(); }
 
 QRect Injector::caretRect() const {
     int x = 0, y = 0, w = 0, h = 0;
