@@ -56,3 +56,11 @@ if (LayerShellQt_FOUND)
     target_link_libraries(openglide-qt PRIVATE LayerShellQt::Interface)
     target_compile_definitions(openglide-qt PRIVATE OPENGLIDE_HAVE_LAYERSHELL)
 endif ()
+
+# ---- install: binary + desktop entry ----
+# The .desktop carries no environment on purpose: platform selection happens
+# in-process (src/main.cpp), so installed launches behave like run.sh launches.
+include(GNUInstallDirs)
+install(TARGETS openglide-qt RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES org.openglide.OpenGlide.desktop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)

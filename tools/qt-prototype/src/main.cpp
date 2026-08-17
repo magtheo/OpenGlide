@@ -45,6 +45,46 @@ int main(int argc, char *argv[]) {
     QSurfaceFormat fmt = QSurfaceFormat::defaultFormat();
     fmt.setAlphaBufferSize(8);
     QSurfaceFormat::setDefaultFormat(fmt);
+
+    // Platform selection, BEFORE QGuiApplication — a platform cannot be changed
+    // after the integration is constructed. The KDE/GNOME paths are xcb; only
+    // wlroots compositors get native Wayland (layer-shell). Without this a bare
+    // launch from a .desktop file or a shell on KDE picks native Wayland, where
+    // kwin freezes layer-shell margins at surface creation (measured,
+    // 2026-08-17) and where Wayland clients cannot self-position at all — the
+    // window is born at (0,0) and no drag can move it. Precedence:
+    //   1. QT_QPA_PLATFORM already set (session, power user, run.sh) — respected
+    //   2. OPENGLIDE_QPA — explicit override, same variable run.sh documents
+    //   3. desktop-based default (run.sh's rule, moved in-process)
+    {
+        const auto desktopHas = [](const char *needle) {
+            const QString desk = QString::fromLatin1(qgetenv("XDG_CURRENT_DESKTOP"));
+            const auto parts = desk.split(u':');
+            for (const QString &d : parts)
+                if (d.contains(QLatin1String(needle), Qt::CaseInsensitive))
+                    return true;
+            return false;
+        };
+        const bool wlroots = desktopHas("sway") || desktopHas("hyprland")
+                          || desktopHas("niri") || desktopHas("river");
+        QByteArray why;
+        QByteArray chosen;
+        if (qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+            why = QByteArrayLiteral("from environment (respected as-is)");
+        } else if (qEnvironmentVariableIsSet("OPENGLIDE_QPA")) {
+            chosen = qgetenv("OPENGLIDE_QPA");
+            why = QByteArrayLiteral("OPENGLIDE_QPA override");
+        } else {
+            chosen = wlroots ? QByteArrayLiteral("wayland") : QByteArrayLiteral("xcb");
+            why = wlroots ? QByteArrayLiteral("wlroots desktop -> layer-shell")
+                          : QByteArrayLiteral("default xcb (override-redirect on KDE, managed on GNOME)");
+        }
+        if (!chosen.isEmpty())
+            qputenv("QT_QPA_PLATFORM", chosen.constData());
+        std::fprintf(stderr, "[env] platform: QT_QPA_PLATFORM=%s (%s)\n",
+                     qgetenv("QT_QPA_PLATFORM").constData(), why.constData());
+    }
+
     QGuiApplication app(argc, argv);
     qmlRegisterType<SwipeSurface>("OpenGlide", 1, 0, "SwipeSurface");
 

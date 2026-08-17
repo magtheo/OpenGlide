@@ -30,6 +30,15 @@ void WindowCtl::attach(QQuickWindow *w) {
     }
 #ifdef OPENGLIDE_HAVE_LAYERSHELL
     if (w && QGuiApplication::platformName() == QLatin1String("wayland")) {
+        // kwin freezes layer-shell margins at surface creation (measured
+        // 2026-08-17) — on KDE this platform is simply wrong, and the failure
+        // is SILENT (window born at 0,0, no drag, no error). Say it loudly.
+        if (qgetenv("XDG_CURRENT_DESKTOP").contains("KDE"))
+            qWarning() << "[window] KDE + native Wayland platform: kwin freezes "
+                          "layer-shell margins at surface creation — the window "
+                          "cannot be moved. Unset QT_QPA_PLATFORM (or set "
+                          "OPENGLIDE_QPA=xcb) for the verified override-redirect "
+                          "path.";
         using LSWindow = LayerShellQt::Window;
         // The surface type is fixed at first commit; LayerShellQt's integration
         // handles that (useLayerShell is a no-op since Qt 6.5 — the integration
@@ -70,6 +79,17 @@ void WindowCtl::attach(QQuickWindow *w) {
             qWarning() << "[window] Wayland platform but no layer-shell surface "
                           "(compositor support?) — focus preservation NOT guaranteed";
         }
+    }
+#else
+    // Built without LayerShellQt (e.g. GNOME dev box) but running on native
+    // Wayland anyway: the window is compositor-managed, self-positioning and
+    // our drag are no-ops, and focus may be stolen. This is the silent
+    // stuck-at-(0,0) failure mode — make it audible.
+    if (w && QGuiApplication::platformName() == QLatin1String("wayland")) {
+        qWarning() << "[window] built without LayerShellQt, running on native "
+                      "Wayland: the window is compositor-managed — self-"
+                      "positioning and dragging do NOT work. Use the xcb "
+                      "platform (unset QT_QPA_PLATFORM, or OPENGLIDE_QPA=xcb).";
     }
 #endif
 }

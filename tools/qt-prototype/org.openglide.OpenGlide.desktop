@@ -1,0 +1,17 @@
+# Desktop entry for installed launches. Deliberately NO wrapper script and NO
+# environment: the platform choice is made in-process (see src/main.cpp), so
+# the .desktop, a panel launcher, and a bare `openglide-qt` in a shell all take
+# the same verified path. If you are tempted to add Exec=env QT_QPA_PLATFORM=…
+# here, fix main.cpp instead — env-var decisions in wrappers only protect the
+# people who use the wrapper.
+[Desktop Entry]
+Type=Application
+Name=OpenGlide
+GenericName=Glide keyboard
+Comment=On-screen keyboard decoded from swipe gestures
+Exec=openglide-qt
+TryExec=openglide-qt
+Icon=input-keyboard
+Terminal=false
+Categories=Utility;Accessibility;
+StartupWMClass=openglide-qt

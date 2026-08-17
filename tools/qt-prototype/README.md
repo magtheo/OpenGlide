@@ -36,6 +36,36 @@ The decoder loads in ~0.2 s (no Python warmup). Window flags
 `Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus` keep keyboard focus on the
 target app (spec §17) — confirmed on XWayland.
 
+### Platform selection is in-process (src/main.cpp), not in run.sh
+
+The KDE/GNOME paths need xcb; only wlroots compositors (sway/Hyprland/niri/river)
+get native Wayland (layer-shell). The binary decides **before** constructing
+`QGuiApplication` — a platform cannot change afterwards:
+
+1. `QT_QPA_PLATFORM` already set (session, power user, `run.sh`) → respected as-is
+2. `OPENGLIDE_QPA` → explicit override
+3. otherwise: desktop-based default (xcb unless wlroots)
+
+Why: a bare launch on KDE otherwise picks native Wayland, where kwin freezes
+layer-shell margins at surface creation and clients cannot self-position — the
+window is born at (0,0) and cannot be dragged (measured 2026-08-17). The env-var
+decision used to live only in `run.sh`, which an installed copy never runs.
+Invalid combos warn on startup (`[window] …` lines).
+
+### Installing
+
+```
+cmake --install build          # or with --prefix /usr for system paths
+```
+installs the binary and `org.openglide.OpenGlide.desktop`, which deliberately
+carries **no wrapper and no environment** — the .desktop, a panel launcher and a
+bare `openglide-qt` in a shell all take the same in-process platform path.
+
+Note on logs: `qInfo`/`qWarning` output follows Qt's default routing — stderr
+normally, but the **journal** when the process runs under systemd
+(`JOURNAL_STREAM` set). If `[window]` lines are "missing" from a redirected
+stderr, check `journalctl --user`.
+
 ## Prototype scope / known limits (deliberate)
 - Decoder is **native C++** (`SwipeEngine`): ~0.1 ms model load, ~7 ms forward,
   ~79 ms dict decode avg (worst-case ~350 ms; was ~1350 ms with Python). Decode
