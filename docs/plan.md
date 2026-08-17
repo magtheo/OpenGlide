@@ -27,6 +27,7 @@ Core technical assumptions are now **measured, not guessed**:
 | Licensing | ✅ preliminary GO (GPL-3.0-only lib + commercial-permissive weights) | ADR-0001 |
 | Decisions / contracts | ✅ ADR-0001..0004, versioned data-formats | decisions/, data-formats.md |
 | **Window / layout UX** | ✅ **compiled, rendered, hand-driven** (2026-08-14, Plasma 6 / XWayland, uinput path): glide → decode → old-word correction → ⌫-hold exercised live — no freeze, no reordering (`help te` sink ground truth). IBus path not connected on that box (session has no IM configured; see RESULTS.md) | ADR-0005 |
+| **UX: does the app say what it's doing?** | 🟡 **step 1 written, logic-tested, not yet built** (2026-08-17) — state pill, refused glides resolve, parked-key ring, actionable menu hints. 85 + 41 assertions; mutation-checked. Needs a hardware pass | [ux review](ux-and-visual-review.md), ADR-0005 amendment |
 
 ## How reality refined the spec's §28 phases
 
@@ -201,6 +202,45 @@ settles the layout, resize, and visibility model. Ordered work:
     rule and the note precedence order. The state suite was mutation-checked
     against the pre-fix logic: 10 failures, including `pending` left set on both
     refusal paths. **Not** compiled or rendered — this box has no Qt.
+
+    Two ADRs moved as a result:
+    - **[ADR-0005 amendment](decisions/0005-keyboard-layout-and-window-ux.md#amendment-2026-08-17-machine-state-returns-to-the-default-surface)** —
+      §1 removed the status line and the committed mirror from the default
+      surface in one sentence, conflating *content* (the mirror — stays opt-in)
+      with *structure* (the states — now permitted, and ADR-0004 §1 always said
+      so). The pill is now the sanctioned home for machine state, may carry no
+      payload, and costs no layout.
+    - **[ADR-0003 amendment](decisions/0003-async-cancellation-and-latency.md#amendment-2026-08-17-the-shipped-stale-discard-is-inverted-and-now-visible)** —
+      surfacing refusals exposed that the shipped stale-discard is the **inverse**
+      of §1: the app refuses the *new* glide, so the *older* word commits.
+      `SwipeId` exists only in the ADRs, never in code. Recorded as an open
+      choice, not silently fixed.
+
+    **Next in this line** (from the review's §4 ordering; each step is
+    independently shippable):
+    - **Step 2 — perceived latency and chrome legibility.** `B4` greedy-first
+      (emit the greedy string after the ~7 ms encoder forward instead of waiting
+      out the 79–1700 ms dictionary decode — the data is already computed and
+      thrown away; needs one extra signal from the decode worker); `B5` keep the
+      trail alive and shimmering while pending instead of fading at 420 ms;
+      `B6` label the chrome's mode switch (candidates vs recent words is
+      currently a border-colour difference); `B7` drain the undo chip's 8 s.
+    - **Step 3 — the visual pass (needs a decision, not much code).** `B12`
+      tokenise the ~10 inline hex literals that bypass `pal`, split light/dark,
+      follow the XDG appearance portal, and write down a contrast floor (key vs
+      background is currently **1.20:1**); `B13` radius + shadow + outline;
+      `B14` idle transparency (ADR-0005 §5 promised it, never built); `B16` an
+      explicit font stack.
+    - **Step 4 —** `B8` tooltips + a gesture cheatsheet; `B23` a three-card first
+      run (card one is the start-on-the-first-letter rule); `B10` clamp the
+      window to the screen and snap to edges — which is also the §7.4 docking
+      entry point; `B11` collapse the four idle pollers (~7 wakeups/s) into one.
+    - **Then** `B21` health panel and `B19` modifiers (Ctrl/Alt/Tab/Esc — a
+      spec-§1-level gap; needs an ADR), and finally `B20`/`B24`/`B22`, the
+      correction-model rewrite, gated on what the preedit probe reports.
+
+    **Before any of it: a hardware pass on this step.** Nothing here has been
+    compiled or rendered (RESULTS.md lists the four open questions).
 
 > ⚠️ Steps 0–2 are **built and tested on hardware** (magtheo, 2026-08-11) — plus a
 > follow-up fix there: `og_ibus_backspace` was blocking the UI thread up to 500 ms

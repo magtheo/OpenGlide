@@ -66,6 +66,42 @@ p50 / p95 / p99. Tighten to a firm SLO once measured; if FUTO comfortably beats
 - **Storage worker** — SQLite personalization/history.
 - **Output owner** — drains `TextOutputQueue`, drives the active `TextBackend`.
 
+## Amendment (2026-08-17): the shipped stale-discard is inverted, and now visible
+
+§1 says the **newest** gesture wins: every decode carries a `SwipeId`, and a
+result whose id is no longer current is discarded. The prototype does the
+opposite, and has since the native decoder landed:
+
+```cpp
+// decoderbridge.cpp — refuses the NEW glide while one is in flight
+bool expected = false;
+if (!m_busy.compare_exchange_strong(expected, true)) return false;
+```
+
+So glide A, then glide B before A returns: **A commits and B is dropped.** Under
+§1 it would be B that commits. `SwipeId` does not exist in the code at all — it
+appears only in this ADR and in `data-formats.md`.
+
+This was invisible until the ADR-0005 state pill gave refusals a voice
+("busy — glide again"), which is the mechanism by which a silent divergence
+became a reportable one. Recording it rather than quietly fixing it, because the
+fix is a real choice:
+
+- **§1 as written is better for the user** — the newest glide is the user's
+  current intent, and committing the older word after they have already started
+  the next one is the wrong answer arriving late.
+- **The shipped guard is cheaper and safer** — one atomic, no cancellation path,
+  and `SwipeEngine` is single-owner by construction (§2). Inverting it means
+  either tagging results and discarding late ones (cheap, but the engine keeps
+  burning a core on a decode nobody wants) or real cancellation (not exposed).
+- The window is small in practice: 20–60 ms on clean strokes, 300–480 ms on
+  sloppy ones (RESULTS.md, KDE section), so this fires only on fast successive
+  glides.
+
+**Open**: implement §1's SwipeId-tagged discard, or amend §1 to match the shipped
+behaviour. Until it is settled the user is at least told, which is the part that
+was actually broken. Do not cite §1 as describing current behaviour.
+
 ## Consequences
 - No torn/interleaved commits; stale-discard removes a whole class of UI flicker bugs.
 - The swipe worker is a serialization bottleneck by design — acceptable because

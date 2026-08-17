@@ -396,6 +396,37 @@ leave the slots and all edit paths refuse stale entries. Logic suite: 85
 assertions (passing on the dev box; `node` absent on the KDE box — install to
 re-run locally).
 
+## Visible state + start-position cue (2026-08-17) — logic-verified, hardware pass pending
+
+Step 1 of [ux-and-visual-review.md](../docs/ux-and-visual-review.md); ADR-0005
+amendment. Not a measurement — recorded here because it changes what the app
+reports about itself, and because one finding fell out of it.
+
+**Finding: the shipped stale-discard is inverted relative to ADR-0003 §1.** §1
+says the newest gesture wins (`SwipeId`-tagged, late results discarded).
+`DecoderBridge::decode` refuses the *new* glide while one is in flight, so the
+**older** word commits and the newer glide is dropped. `SwipeId` exists nowhere
+in the code — only in ADR-0003 and `data-formats.md`. This had been true since
+the native decoder landed and was undetectable from the UI; it surfaced only
+once refusals got a visible message ("busy — glide again"). Logged as an open
+choice in the ADR-0003 amendment, not silently fixed.
+
+**Verified without hardware:** `tools/qml-logic-test` runs two suites —
+history/text model **85/85** (unchanged) and a new state suite **41/41**. The
+state suite was mutation-checked against the pre-fix logic and fails **10**
+assertions there, including `pending` left set on both refusal paths, so it
+catches the bug rather than describing it.
+
+**Not verified:** nothing was compiled or rendered — the box had no Qt, no
+`qmllint`, no Qt headers for `-fsyntax-only`. Open on hardware:
+- the `hoverMoveEvent` / `hoverLeaveEvent` overrides compile and fire on all
+  three shipped window modes (managed xcb / override-redirect / layer-shell);
+  the chrome controls already highlight on `containsMouse`, so the delivery path
+  is expected to hold, but it is untested for the surface item;
+- the pill's layout at the S/M/L presets — it borrows 3.2 u and elides;
+- whether the ring reads as "start here" or as noise during real use;
+- whether covering the two oldest history chips is noticed at all.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make

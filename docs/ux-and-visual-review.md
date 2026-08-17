@@ -5,7 +5,12 @@ candidates for ADR-0007 and the Phase 2 "remaining" list are marked ★)
 **Implemented so far:** step 1 of §4 — **B1, B2, B3, B9** landed 2026-08-17
 (plan.md Phase 2 item 10), closing **F1, F2, F3** and the menu half of **F8**.
 Logic-tested (`tools/qml-logic-test`, 85 + 41 assertions), not yet compiled or
-rendered — the box it was written on has no Qt.
+rendered — the box it was written on has no Qt. It moved two ADRs:
+[ADR-0005](decisions/0005-keyboard-layout-and-window-ux.md) is amended (machine
+state returns to the default surface; content stays opt-in), and
+[ADR-0003](decisions/0003-async-cancellation-and-latency.md) is amended with a
+divergence the work exposed — the shipped stale-discard is the *inverse* of its
+§1, refusing the new glide so the older word commits.
 **Date:** 2026-08-17
 **Subject:** `tools/qt-prototype` @ `83d40cd` — `main.qml` (1369 lines) and the
 C++ items it drives.
@@ -391,7 +396,7 @@ prefer confirming — and it sidesteps deletion entirely.
 
 | # | Items | Why here |
 |---|---|---|
-| 1 | B1, B2, B3, B9 | The app stops lying about its own state, and the measured accuracy gap gets its first intervention. All QML, all small. |
+| 1 ✅ | B1, B2, B3, B9 | **Landed 2026-08-17.** The app stops lying about its own state, and the measured accuracy gap gets its first intervention. All QML plus one C++ signal and a bool return. Hardware pass still open. |
 | 2 | B4, B5, B7, B6 | Perceived latency and legibility of the chrome. B4 needs one C++ signal. |
 | 3 | B12, B13, B14, B16 | The visual pass proper — theme tokens, dark mode, body, type. Needs a design decision, not much code. |
 | 4 | B8, B23, B10, B11 | Discoverability, screen bounds, idle cost. |

@@ -25,6 +25,16 @@ verified choice here; put an open executable question in `tools/*-probe/`.
 (0005's remaining gates need real hardware: a build, the aspect-band corpus
 measurement, and the mouse-only walkthrough).
 
+**Amendments.** An ADR that is refined rather than replaced grows an
+`## Amendment (date): <what changed>` section instead of being superseded — the
+original text stays put so the reasoning is still readable. Three carry one:
+
+| ADR  | Amendment                                                                  |
+|------|----------------------------------------------------------------------------|
+| 0003 | the shipped stale-discard is *inverted* vs §1 — the new glide is refused, so the older word commits; `SwipeId` is unimplemented. Open choice |
+| 0004 | `OPENGLIDE_LOG_CONTENT=1` named as the sanctioned content-logging opt-in |
+| 0005 | machine **state** returns to the default surface (a pill, no payload); the committed **mirror** stays opt-in |
+
 ## Conventions
 
 - Cite primary sources for every load-bearing claim. Mark anything not yet

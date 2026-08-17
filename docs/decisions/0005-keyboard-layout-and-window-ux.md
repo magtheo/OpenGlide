@@ -264,6 +264,47 @@ reported caret rectangle instead of covering the text being typed.
   its IBus engine registration and release nothing on collapse; ADR-0004's
   crash-safety rule (no stuck grabs) extends to the collapsed state.
 
+## Amendment (2026-08-17): machine state returns to the default surface
+
+§1 removed two things from the default surface in one sentence — "The `status`
+line and the `committedBar` mirror are removed … they return only under the
+content-logging opt-in" — and that sentence conflated two different kinds of
+thing under one word, *diagnostics*.
+
+- The **committed mirror** is user content: every word you have typed, on screen,
+  for as long as the window is open. It is exactly what ADR-0004 §1 exists to
+  keep off the default surface. That half of §1 was right and stands.
+- The **status line's states** are not content. "decoding…", "too short",
+  "decoder stopped" carry no typed text, no candidate, no geometry. ADR-0004 §1
+  permits precisely this at default levels ("stage timings … backend selection,
+  errors, focus/visibility transitions — never payloads").
+
+Removing both together left the application with **no channel at all** for saying
+what it was doing. Measured on `main.qml` @ `83d40cd`: six computed states —
+decoding, warming up, too short, stalled, decoder-dead — and one call site, the
+opt-in overlay. By default a 480 ms decode, a glide the decoder refused, and a
+decoder that never loaded were indistinguishable from a working keyboard doing
+nothing. (See [ux-and-visual-review.md](../ux-and-visual-review.md) F1/F2.)
+
+**Amended decision:** structure returns to the default surface; content does not.
+
+- A **state pill** in the chrome band is the sanctioned home for machine state.
+  Any new state indicator goes there — not into the diagnostics line.
+- It may carry **no payload**. A decoded word, a candidate, the greedy string,
+  the injected mirror, caret coordinates and queue depth stay behind
+  ⋯ → Diagnostics. This is the test for anything added later: if it has to
+  interpolate something the user typed, it is not eligible.
+- **It costs no layout.** The pill borrows the two leftmost chip slots rather
+  than claiming a row, so §1's headline number — the glide surface at 60% of the
+  window — is unchanged. Precedence in those slots: state pill > recent-word
+  chips (the slots fill oldest-first, so the two it covers are the two least
+  useful) > empty. Chips never *shift*; they yield. A chip that moves is a chip
+  you have to re-find, which is the §1 rule this preserves.
+- Transient states expire (2.6 s). A note that outlives its cause becomes
+  furniture and stops being read.
+
+This does not reopen §1's geometry, only its treatment of the status text.
+
 ## Verification gates
 
 - [x] **Zero-diff geometry data.** `languages/en/layout.json` compared
