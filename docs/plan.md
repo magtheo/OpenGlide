@@ -200,7 +200,7 @@ Speech (whisper.cpp) → rich IME (Fcitx 5) → languages (Norwegian).
 - ~~Qt6 dev + QML modules~~ ✅ installed.
 - ~~`libibus-1.0-dev`~~ ✅ installed (IBus backend now buildable).
 - ~~CMake ≥3.29 (bump or patch) + ExecuTorch build~~ ✅ built from source (executorch v1.4.0 + XNNPACK submodules, 16-core box; app links in ~73 s incremental after the first ET build).
-- Sway / Hyprland / KDE sessions — **KDE row measured** (2026-08-14, Plasma 6 / Fedora 44): the session has **no IM configured at all** (`QT_IM_MODULE`/`GTK_IM_MODULE` unset, `XMODIFIERS=@im=none`; the running ibus-daemon is unused) → app runs uinput-only, which works end-to-end. Next step is session config (Plasma's virtual-keyboard=IBus), not app debugging. Synthetic pointer injection is dead on Plasma 6 (XTEST no-op, uinput ABS/pen ignored, ydotoold device lacks EV_ABS) — manual testing there. RESULTS.md.
+- Sway / Hyprland sessions — **KDE row closed for shipping** (2026-08-14..17, Plasma 6 / Fedora 44): the keyboard now runs there by default as an **override-redirect xcb window** — free positioning AND no focus stealing (kwin steals focus from managed xcb windows when the target is a Wayland window; layer-shell fixes focus but kwin freezes margins at creation, so no dragging). IBus connects (address-file resolver) but kwin's bridge drops engine commits → text stays on uinput, IBus is signals-only (`OPENGLIDE_TEXT_BACKEND` overrides). See the KDE section in RESULTS.md. Sway/Hyprland (layer-shell) remain the open rows.
 
 ## Pointers
 - Vision: [openglide_technical_spec.md](openglide_technical_spec.md)

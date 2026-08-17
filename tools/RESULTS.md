@@ -352,6 +352,40 @@ Accuracy under sloppy glides is mostly top-1 but re-glides happen (`cifr` ranked
 cir/cider above code until a cleaner pass). No decoder changes made on this box —
 this is the ADR-0006 corpus story, not a new signal.
 
+### Window focus + positioning on Plasma — the "nothing lands" chain, resolved by override-redirect (c156f5c)
+
+The uinput text that "stopped landing" after the IBus connect fix had a window
+cause, not a text cause: **kwin takes focus from a MANAGED xcb window on click
+whenever the previous target is a Wayland window** (WindowDoesNotAcceptFocus is
+an X hint that only protects X-to-X focus). Every glide's keystrokes went into
+the keyboard window itself. Same keyboard + XWayland sink = worked; same
+keyboard + Wayland sink = void — which is why it "worked before".
+
+Fix ladder, each rung measured:
+- **layer-shell** (`LayerShellQt`, Wayland QPA): keyboard-interactivity none
+  DOES fix focus — but **kwin freezes margins at surface creation**: no live
+  repositioning, `requestUpdate()` and resize-nudge commits do not move the
+  surface (screenshot-diff verified, 311/598/31k-pixel runs). wlroots applies
+  margin changes dynamically, so the code path stays for Sway/Hyprland.
+- **override-redirect on xcb** (`X11BypassWindowManagerHint`): an OR window is
+  unmanaged — `setX/setY` are authoritative (verified: window moves) and clicks
+  cannot activate anything (verified: text lands while pressing the keyboard).
+  This ships as the KDE default; no user configuration.
+- Two QML-side traps fixed along the way: `startSystemMove/Resize` needs a WM
+  (silent no-op on OR/layer-shell) → manual drag/resize throughout; and
+  **`QCursor::pos()` returns SURFACE-RELATIVE coordinates on Qt Wayland** —
+  mixing it with global math clamps every drag to (0,0). Deltas now derive from
+  `posX() + mapToItem(mouse)`.
+
+Shipping matrix (run.sh + WindowCtl): GNOME = managed xcb (unchanged, the
+long-verified path) · KDE = xcb + override-redirect · wlroots = layer-shell
+Wayland (untested on hardware). `OPENGLIDE_QPA` and `OPENGLIDE_OR=0/1` override.
+
+A kwin window rule ("accept focus: no") was trialled during diagnosis and
+REJECTED: per-user configuration is not a shipping solution; it was deleted.
+Screenshot-diff via `spectacle` + numpy is the standing technique for
+compositor-behaviour questions that have no queryable state.
+
 ### Chip coherence (user-reported in the wild) — fixed by 6425926, hardware pass pending
 Stale words from an earlier target appeared in the chrome slots after switching
 targets mid-session; root cause: history validates against the app's mirror, and
