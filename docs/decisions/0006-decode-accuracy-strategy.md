@@ -134,12 +134,37 @@ re-ranking is useless without decode depth:
   real apps report it, preedit deserves to be weighed against both levers here
   rather than deferred behind them.
 
+## Addendum (2026-08-17): the length band already excluded a known miss
+
+Measured with `tools/native-decode-spike/band_probe.py` (no model needed) over
+all 39 usable recorded glides — see
+[decode-accuracy-review.md](../decode-accuracy-review.md) for the full analysis:
+
+- `(word_len − greedy_len)` is `{-1: 3, 0: 32, +1: 3, +4: 1}` — **38/39 within
+  ±1**. On clean strokes the ±3 band does no discrimination work at all; it is a
+  speed constant that only ever binds on the sloppy tail.
+- **The controlled corpus's one miss was never scored.** `window` with greedy
+  `wi` is `|6−2| = 4 > 3`, so it was excluded before any CTC ran. F1 records it
+  as "a truncated glide, not a decode error" — right about the cause, but it has
+  since been read as "nothing to fix", and the decoder in fact never got to have
+  an opinion. Whether it would have won is unknown; that it could not compete is
+  arithmetic.
+
+This does not reorder the §Decision — that still waits on the `--diagnose` tally
+— but it does mean **the depth half of layer 1 has a measured instance**, and
+that the cheapest experiment (widen the constants, derive the length estimate
+from expected non-blank emissions rather than the greedy string) should be run
+before any beam work.
+
 ## Verification gates
 
 - [ ] **Run `corpus_test --diagnose` and record the miss tally** (out-ranked /
   length-pruned / alph-pruned / not-in-dict) in RESULTS.md — this is what turns
   F2 from a three-word anecdote into a measurement, and it should come *before*
-  the depth-vs-rescoring ordering is locked.
+  the depth-vs-rescoring ordering is locked. The **alph** prune is the one this
+  is really for: it is a hard gate (every letter must make some timestep's
+  top-3), it is the harshest of the three, and it is the only one that cannot be
+  measured without the model (the length band now can — see the addendum).
 - [ ] **A/B the doubling cap**: `--doublings 1` vs `--doublings 2` on the
   controlled corpus. Accept only with zero regressions (`hello`, `good`, and the
   doubles that already recover must all still work; `help` must still not).

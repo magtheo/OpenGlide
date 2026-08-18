@@ -153,6 +153,21 @@ settles the layout, resize, and visibility model. Ordered work:
    `--doublings 1` vs `2` + `--diagnose` on a fresh ≥30-real-glide corpus — zero
    regressions, and the tally settles depth-vs-rescoring priority.
 
+   **Analysis 2026-08-17: [decode-accuracy-review.md](decode-accuracy-review.md)**
+   — the strictness is four constants, three of them hard gates that exclude a
+   word from scoring entirely (per-timestep top-3 `alph`; `|wlen−glen| ≤ 3` plus
+   a `glen+3` DFS depth cap; a 2..12 lexicon filter). Measured with the new
+   `band_probe.py` (no model needed): **38/39 recorded glides have a greedy
+   length within ±1 of the target**, so the ±3 band does no discrimination work
+   on clean input — and the controlled corpus's single miss (`window`, greedy
+   `wi`) was **never scored**, being `|6−2| = 4 > 3`. The review's proposal:
+   widen recall *and* add uncorrelated evidence in the same change — a **shape
+   channel** (DTW against the candidate's key polyline; `reaspect.h` is most of
+   it, and its errors are uncorrelated with CTC's, which is what the frequency
+   prior lacked) and a soft length estimate from expected non-blank emissions
+   instead of the greedy string. Plus: use the #1/#2 score margin, currently
+   computed and discarded, to gate auto-commit.
+
 9. **Output ownership + preedit probe** (3c6b226; ADR-0003 single-owner + the
    deletion wall). Two bugs, one root cause — output had no single owner: a
    **freeze** (uinput backspace is ~17 ms of real sleeps/char and ran on the UI
