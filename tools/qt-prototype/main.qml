@@ -913,7 +913,6 @@ Window {
                                 win.correct(parent.slot.idx);
                             }
                         }
-                        }
                     }
                 }
             }
