@@ -427,6 +427,50 @@ catches the bug rather than describing it.
 - whether the ring reads as "start here" or as noise during real use;
 - whether covering the two oldest history chips is noticed at all.
 
+## corpus_test --diagnose finally run + doubling-bonus A/B (2026-08-18) — the shipped config is a measured regression
+
+ADR-0006's own step 0, blocked until now on "no model on the box". This box has
+`model_fp32.pte` in-tree, ExecuTorch compiled, and `/usr/share/dict/american-english`,
+so the gate ran. Both corpora, exclusions per F1 (corpus.jsonl #2–6):
+
+```
+cd tools/native-decode-spike && ./build/corpus_test <pte> /usr/share/dict/american-english <flat> word_freq.txt --diagnose [--doublings N]
+# corpus flattened with: python3 dump_corpus.py ../futo-spike/corpus*.jsonl /tmp/flat.txt
+```
+
+| config | controlled (18) | corpus.jsonl clean (21) | combined (39) |
+|---|---|---|---|
+| shipped (doublings cap 2, λ=4.5) | 15 (83%) | 17 (81%) | **32 (82%)** |
+| cap 1 | 15 (83%) | 17 (81%) | 32 (82%) |
+| **doubling bonus OFF (cap 0)** | **17 (94%)** | **20 (95%)** | **37 (94.9%)** |
+
+**Finding 1 — every out-ranked miss lost to a spurious doubling.** At the shipped
+config the six rerank-able misses are `open→oppen`, `water→watter` (×2 corpora),
+`mouse→mousee`, `story→stoory`, `river→ribber`. In each the greedy string already
+contained the target (or near it) and a doubled-consonant variant stole rank 1 by
+0.34–1.37 nats — the flat +4.5/doubling bonus dwarfs the CTC gap. With the bonus
+off, `helo→hello` and `geen→green` **still win on CTC alone**: on these 39 glides
+the bonus rescued zero words and flipped five. It is net −12 pp as shipped.
+
+**Finding 2 — `window` is alph-pruned, not length-pruned.** The diagnosed verdict
+is `alph-pruned: 'n' never in any timestep's top-3` (swipe_engine.cpp checks alph
+before length, and `maxwlen = greedy_len+3 = 5` would also bar it — it is
+triple-gated). Widening the length band ±3→±5 (decode-accuracy-review §1) would
+NOT have surfaced it. Band widening has zero measured support: **0 length-pruned,
+0 not-in-dict** across all 39 — consistent with band_probe's 38/39 within ±1.
+
+**Finding 3 — the last miss at cap 0 is the margin case.** `river` with greedy
+`riber` loses to `rober` by **0.09 nats** (rank 2, daily top-5 100% at cap 0).
+That is exactly decode-accuracy-review §3 E4: a margin that small should change
+behaviour (don't auto-commit, show top-2), not just rank.
+
+Caveats, stated plainly: n=39, all recorded sessions — the live-24 capture
+(god→good etc., F1) was never persisted and cannot be re-scored, so the bonus's
+upside is untested today, only its downside is measured. Before removing it
+outright, re-capture real glides (step 1) or gate it on CTC dwell evidence
+(review §3 E3's elision model). Latency: cap 0 vs 2 within noise (~440–475 ms
+avg, dominated by trie DFS width, not the bonus arithmetic).
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make

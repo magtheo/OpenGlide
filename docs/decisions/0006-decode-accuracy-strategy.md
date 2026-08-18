@@ -156,6 +156,38 @@ that the cheapest experiment (widen the constants, derive the length estimate
 from expected non-blank emissions rather than the greedy string) should be run
 before any beam work.
 
+## Addendum (2026-08-18): the diagnose gate ran — the doubling bonus is a measured regression
+
+`corpus_test --diagnose` finally ran (a box with the model, ExecuTorch and the
+system dictionary). Full tables and commands in
+[RESULTS.md](../../tools/RESULTS.md) "corpus_test --diagnose finally run".
+What it changes here:
+
+- **Zero length-pruned, zero not-in-dict across all 39 glides.** The 2026-08-17
+  addendum's cheap experiment — widening the ±3 band — has no measured support;
+  the band binds on nothing in the data. The `window` reading is also corrected:
+  the diagnosed verdict is **alph-pruned** (`'n'` never in any timestep's top-3),
+  not length-pruned — alph is checked first, `maxwlen = greedy_len+3` would bar
+  it too, so a widened band alone would not have surfaced it. Truncated glides
+  are an **alph** problem before they are a length problem.
+- **Every rerank-able miss lost to a spurious doubling** (`oppen`, `watter`,
+  `mousee`, `stoory`, `ribber`): the flat +4.5/doubling bonus (256b14e, cap
+  lifted a1ec41c) flips five correct words for zero rescues on these corpora —
+  `hello` and `green` win on CTC alone with the bonus off. Combined top-1 goes
+  82% → **94.9%** with `--doublings 0`. The acceptance gate below ("A/B the
+  doubling cap… accept only with zero regressions") is therefore **failed by
+  the shipped config**; λ-cap 1 vs 2 is within noise, the bonus itself is the
+  regression.
+- The one remaining miss at cap 0 (`river`, greedy `riber`, lost to `rober` by
+  0.09 nats) is the score-margin case (review §3 E4) — small margin should
+  change behaviour, not just rank.
+
+Standing caveat: the live-24 capture that motivated the bonus (`god→good`) was
+never persisted, so its upside is untestable today — only the downside is
+measured. Action: do not ship cap-2 default as "safe"; either re-capture real
+glides and re-A/B, or replace the flat bonus with dwell-gated elision scoring
+(review §3 E3) before the next accuracy claim.
+
 ## Verification gates
 
 - [ ] **Run `corpus_test --diagnose` and record the miss tally** (out-ranked /

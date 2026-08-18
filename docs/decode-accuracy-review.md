@@ -275,6 +275,25 @@ it lifts top-1 without regressing cases that currently work** — `hello`, `good
 and the doubles that already recover must survive; `help` must still not win when
 `hello` was meant.
 
+> **Measured update 2026-08-18 — row 0 ran, and it edits this table.** Full
+> numbers in RESULTS.md ("corpus_test --diagnose finally run"). Three rows move:
+>
+> - **Row 2 is half-emptied by measurement.** 0 length-pruned across 39 glides;
+>   the G2/G3 halves of row 2 have no measured miss to fix, and the `window`
+> class is **alph-pruned** (`'n'` never top-3), not length-pruned — the G1
+> top-3→top-5 half is what targets it, and the soft length estimate (row 3)
+> should be understood as fixing the alph/depth interaction, not the band.
+> - **A new row 0.5 jumps the queue: the doubling bonus.** Six of seven misses
+> at the shipped config lost to a spurious doubled consonant; `--doublings 0`
+> takes combined top-1 82% → 94.9% with `hello`/`green` still winning on CTC
+> alone. The flat λ=4.5 (review §3 E3's "degenerate case") is measured
+> net-negative; E3 dwell-gating is now the principled fix, not a generalization.
+> - **Row 4's E4 margin got its exemplar**: the last cap-0 miss loses by 0.09
+> nats (`riber` → river/rober, rank 2) — exactly the don't-auto-commit case.
+>
+> Caveat carried from RESULTS.md: the live-24 glides that motivated the bonus
+> were never persisted; re-capture (row 1) before deleting it outright.
+
 ---
 
 ## 6. What this does not change

@@ -27,13 +27,15 @@ measurement, and the mouse-only walkthrough).
 
 **Amendments.** An ADR that is refined rather than replaced grows an
 `## Amendment (date): <what changed>` section instead of being superseded — the
-original text stays put so the reasoning is still readable. Three carry one:
+original text stays put so the reasoning is still readable. Four carry one (0006
+uses `## Addendum` per its own convention):
 
 | ADR  | Amendment                                                                  |
 |------|----------------------------------------------------------------------------|
 | 0003 | the shipped stale-discard is *inverted* vs §1 — the new glide is refused, so the older word commits; `SwipeId` is unimplemented. Open choice |
 | 0004 | `OPENGLIDE_LOG_CONTENT=1` named as the sanctioned content-logging opt-in |
 | 0005 | machine **state** returns to the default surface (a pill, no payload); the committed **mirror** stays opt-in |
+| 0006 | diagnose gate ran: the doubling bonus is a measured −12 pp regression (0 rescues, 5 flips); `window` is alph-pruned, not length-pruned |
 
 ## Conventions
 
