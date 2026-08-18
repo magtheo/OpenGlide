@@ -500,6 +500,53 @@ glides are gold; unamended survivors mean "the user let it stand", and
 backspace-retyped words stay mislabeled — use `fold_corpus.py --corrected`
 when labels must be certain.
 
+## G1 alph A/B + E4 margin behaviour (2026-08-18, later) — widening measured NET-NEGATIVE; margin-gating ships
+
+**G1 (alph top-K) verdict: keep K=3.** `set_alph_topk(k)` + `corpus_test --alph K`
+made the gate tunable, then it was A/B'd (K=3/4/5/6 × doublings 0/2) over all
+three corpora — controlled, daily-clean, and the 27-glide live corpus scored
+with the app's own personalization (`--user-freq`, without which live labels
+mismatch by construction: they ARE the personalized decode's answers).
+
+| config | controlled | daily | live |
+|---|---|---|---|
+| K=3 db=2 (shipped) | 83% | 81% | 93% (top-5 100%) |
+| K=4..6 db=2 | 83% | 81% | 85% |
+| K=3 db=0 | 94% | 95% | 89% |
+| K=4..6 db=0 | 94% | 95% | 81% |
+
+- Controlled/daily: widening changes **nothing** — no miss is alph-pruned at
+  K=3 on clean strokes.
+- Live: widening *costs* 8 pp. Two of the "new misses" are the weak-label
+  artifact (the user's sloppy `testing` attempts, mislabeled `tarim`/`taring`,
+  become `testing` at K≥4 — i.e. widening decoded them RIGHT and the label said
+  WRONG), but no gold label is recovered either.
+- **`window` is unrecoverable by alph widening, full stop**: still alph-pruned
+  at K=6 — the truncated stroke (greedy "wi") never traveled to n/d/o/w, so
+  those letters are absent from the emissions at ANY rank. The review's
+  "G1 top-3→top-5 targets the window class" is measured false; truncated
+  glides are a data problem (the pill's "too short — glide further" is already
+  the right answer), not a gate problem.
+- Doublings on live WITH personalization: db=2 (93%) beats db=0 (89%) — but
+  that comparison is self-confirming (labels are the db=2 app's own top-1s);
+  it does not reopen the 39-glide finding, it re-flags the labels as weak
+  until gold (chip-corrected) volume grows.
+
+**E4 ships: score margin → behaviour.** When top-1 and top-2 finish within
+`ambigMargin` (0.6 nats default), the keyboard no longer auto-commits: the two
+contenders show as equal-weight chips, the state pill moves to the freed right
+half and says "close match — click a word", and the next input event (glide,
+tap, space, backspace, word-delete) flushes top-1 first — so ignoring the
+question behaves exactly like today, answering it turns a coin-flip commit
+into a chosen one. A non-top-1 click also amends the glide's corpus record
+(the choice is the label). Threshold evidence: on the 39-glide A/B every
+wrong-commit with gap < 0.6 was a true flip (`oppen` 0.35, `mousee` 0.34,
+`watter` 0.56) and no correct commit sat that close. Logic suites: history
+**104** (threshold rule, choice-commits-and-amends, flush-on-every-entry-point,
+per-glide gid integrity), state **43** (ambig precedence: short > ambig >
+stalled). Built and launched on the KDE box; the hold's live look still needs
+a real photo-finish glide to eyeball.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make

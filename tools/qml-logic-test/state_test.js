@@ -20,7 +20,7 @@ function makeWin(opts = {}) {
   const state = {
     // decode state
     candidates: [], pending: false, lastShort: false, timedOut: false, dropped: false,
-    decoderDead: false, warmupSecs: 0,
+    decoderDead: false, warmupSecs: 0, ambiguous: false,
     // things noteShort/glideFinished touch but this suite doesn't exercise
     injected: '', history: [], histOpen: -1, histMax: 12, shiftState: 0,
     pendingUndo: '', pendingUndoEntry: null, undoGen: -1, targetGen: 0, staleMs: 300000,
@@ -52,8 +52,8 @@ function check(name, cond, extra = '') {
 // The invariant behind rule 1, asserted after every outcome.
 function checkResolves(w, label) {
   const note = w.fn.noteState(w.state.decoderDead, w.decoder.ready, w.state.dropped,
-                              w.state.pending, w.state.lastShort, w.state.timedOut,
-                              w.state.warmupSecs);
+                              w.state.pending, w.state.lastShort, w.state.ambiguous,
+                              w.state.timedOut, w.state.warmupSecs);
   check(`${label}: not silently pending`, !(w.state.pending && !w.decoder.ready));
   check(`${label}: the user is told something`, note.text.length > 0,
         `pending=${w.state.pending} note=${JSON.stringify(note.text)}`);
@@ -82,7 +82,7 @@ console.log('state: glide outcomes resolve, note precedence\n');
   check('  the expiry timer is armed', w.calls.noteTimer === 1);
   check('  the watchdog is NOT armed', w.calls.watchdog === 0);
   checkResolves(w, 'after a dropped glide');
-  const note = w.fn.noteState(false, true, true, false, false, false, 0);
+  const note = w.fn.noteState(false, true, true, false, false, false, false, 0);
   check('  and it reads "busy — glide again"', note.text === 'busy — glide again');
   check('  flagged as a problem, not progress', note.problem === true);
 }
@@ -109,7 +109,7 @@ console.log('state: glide outcomes resolve, note precedence\n');
   // A note that never expires becomes furniture — lastShort used to be cleared
   // only by the NEXT full-length glide.
   w.state.lastShort = false;                      // what noteTimer does
-  const note = w.fn.noteState(false, true, false, false, false, false, 0);
+  const note = w.fn.noteState(false, true, false, false, false, false, false, 0);
   check('  once expired, no note at all', note.text === '');
 }
 
@@ -123,16 +123,18 @@ console.log('state: glide outcomes resolve, note precedence\n');
 
 { // --- precedence: the most actionable state wins
   const w = makeWin();
-  const all = (d, r) => w.fn.noteState(d, r, true, true, true, true, 7);
+  const all = (d, r) => w.fn.noteState(d, r, true, true, true, true, true, 7);
   check('dead decoder outranks everything', all(true, true).text === 'decoder stopped — restart');
   check('  not-ready outranks the rest', all(false, false).text === 'loading decoder… 7 s');
   check('  loading counts as progress, not a problem', all(false, false).problem === false);
-  check('busy outranks pending', w.fn.noteState(false, true, true, true, true, true, 0).text === 'busy — glide again');
-  check('pending outranks short', w.fn.noteState(false, true, false, true, true, true, 0).text === 'decoding…');
-  check('  decoding is progress, not a problem', w.fn.noteState(false, true, false, true, false, false, 0).problem === false);
-  check('short outranks stalled', w.fn.noteState(false, true, false, false, true, true, 0).text === 'too short — glide further');
-  check('stalled is last', w.fn.noteState(false, true, false, false, false, true, 0).text === 'decode stalled — glide again');
-  check('idle says nothing at all', w.fn.noteState(false, true, false, false, false, false, 0).text === '');
+  check('busy outranks pending', w.fn.noteState(false, true, true, true, true, true, true, 0).text === 'busy — glide again');
+  check('pending outranks short', w.fn.noteState(false, true, false, true, true, true, true, 0).text === 'decoding…');
+  check('  decoding is progress, not a problem', w.fn.noteState(false, true, false, true, false, false, false, 0).problem === false);
+  check('short outranks an ambiguous hold', w.fn.noteState(false, true, false, false, true, true, true, 0).text === 'too short — glide further');
+  check('an ambiguous hold outranks stalled', w.fn.noteState(false, true, false, false, false, true, true, 0).text === 'close match — click a word');
+  check('  the hold asks for a click — a problem', w.fn.noteState(false, true, false, false, false, true, false, 0).problem === true);
+  check('stalled is last', w.fn.noteState(false, true, false, false, false, false, true, 0).text === 'decode stalled — glide again');
+  check('idle says nothing at all', w.fn.noteState(false, true, false, false, false, false, false, 0).text === '');
 }
 
 { // --- ADR-0004: the note carries structure, never content

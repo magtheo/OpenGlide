@@ -70,7 +70,7 @@ static Result run(SwipeEngine& eng, const char* corpus, float aspect, bool verbo
             else                           r.miss_other++;
             std::printf("     -> %-13s ", v.c_str());
             if (v == "alph-pruned")
-                std::printf("letter '%c' never in any timestep's top-3", diag.alph_blocker);
+                std::printf("letter '%c' never in any timestep's top-K set", diag.alph_blocker);
             else if (v == "length-pruned")
                 std::printf("|%d - %d| = %d > 3  (maxwlen %d)", (int)target.size(), diag.greedy_len,
                             std::abs((int)target.size() - diag.greedy_len), diag.max_word_len);
@@ -104,8 +104,18 @@ int main(int argc, char** argv) {
             "             removed the word, or its rank if it was merely\n"
             "             out-scored — plus a tally (ADR-0006 F2)\n"
             "  --doublings N  cap on collapsed pairs the double-letter bonus\n"
-            "             rewards. 1 = the old behaviour (coffee unreachable),\n"
-            "             2 = default. A/B these against the corpus.\n");
+            "                 rewards. 1 = the old behaviour (coffee unreachable),\n"
+            "                 2 = default. A/B these against the corpus.\n"
+            "  --alph K       per-timestep letter survival set: a word is scored\n"
+            "                 only if every letter makes some timestep's top-K\n"
+            "                 (G1, ADR-0006; default 3). The diagnosed harshest\n"
+            "                 prune — widen to accept truncated/sloppy glides.\n"
+            "  --user-freq F  personalization counts to load before decoding.\n"
+            "                 Live-corpus labels come from the APP's decode, which\n"
+            "                 personalizes (user_freq.tsv); scoring without it\n"
+            "                 mismatches even uncorrected glides. Pass the same\n"
+            "                 file the app used (~/.local/share/openglide/\n"
+            "                 user_freq.tsv).\n");
         return 2;
     }
 
@@ -120,6 +130,8 @@ int main(int argc, char** argv) {
     bool wordModel = true;   // key-centre polyline; --model line for the old one
     bool diagnose = false;
     int  maxDoublings = -1;  // -1 = engine default
+    int  alphTopk = -1;      // -1 = engine default
+    const char* userFreq = "";
 
     int pos = 4;
     for (int i = 4; i < argc; i++) {
@@ -127,6 +139,14 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--diagnose")) { diagnose = true; continue; }
         if (!std::strcmp(argv[i], "--doublings") && i + 1 < argc) {
             maxDoublings = std::atoi(argv[++i]);
+            continue;
+        }
+        if (!std::strcmp(argv[i], "--alph") && i + 1 < argc) {
+            alphTopk = std::atoi(argv[++i]);
+            continue;
+        }
+        if (!std::strcmp(argv[i], "--user-freq") && i + 1 < argc) {
+            userFreq = argv[++i];
             continue;
         }
         if (!std::strcmp(argv[i], "--model") && i + 1 < argc) {
@@ -149,9 +169,10 @@ int main(int argc, char** argv) {
         else if (pos == 5) { lambda = std::atof(argv[i]); pos++; }
     }
 
-    SwipeEngine eng(model, dict, freq);
+    SwipeEngine eng(model, dict, freq, userFreq);
     if (lambda >= 0.0) eng.set_freq_lambda(lambda);
     if (maxDoublings >= 0) eng.set_max_doublings(maxDoublings);
+    if (alphTopk >= 1) eng.set_alph_topk(alphTopk);
     if (!eng.ready()) { std::fprintf(stderr, "engine not ready\n"); return 1; }
 
     // The geometry the decoder is actually scoring against — same source the UI

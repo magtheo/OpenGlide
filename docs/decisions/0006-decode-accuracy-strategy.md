@@ -188,6 +188,27 @@ measured. Action: do not ship cap-2 default as "safe"; either re-capture real
 glides and re-A/B, or replace the flat bonus with dwell-gated elision scoring
 (review §3 E3) before the next accuracy claim.
 
+## Addendum (2026-08-18, later): alph widening measured net-negative; E4 margin ships
+
+Two follow-ups to the morning's tally, both measured (RESULTS.md "G1 alph A/B +
+E4 margin behaviour"):
+
+- **G1 stays at top-3.** The gate is now tunable (`set_alph_topk`,
+  `corpus_test --alph K`) and was A/B'd at K=3..6 over all three corpora
+  (live scored with the app's personalization via `--user-freq` — live labels
+  are the personalized decode's own answers, so scoring without it mismatches
+  by construction). Widening recovers nothing on clean corpora and costs 8 pp
+  on live; the `window` miss is alph-pruned even at K=6 because the truncated
+  stroke never emitted n/d/o/w at any rank. Truncated glides are a data
+  problem — the state pill's "too short — glide further" — not a gate problem.
+- **E4 (score margin → behaviour) is implemented in the prototype.** A
+  top-1/top-2 gap under 0.6 nats holds the auto-commit, shows the two
+  contenders as chips with the pill asking "close match — click a word", and
+  the next input event defaults to top-1 (nothing is lost by ignoring it). A
+  non-top-1 choice amends the glide's corpus record — the same label path as
+  chip corrections. Threshold chosen from the 39-glide A/B: every wrong
+  commit with gap < 0.6 was a true flip; no correct commit sat that close.
+
 ## Verification gates
 
 - [ ] **Run `corpus_test --diagnose` and record the miss tally** (out-ranked /

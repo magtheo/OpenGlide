@@ -23,7 +23,7 @@ function makeWin() {
     injected: '', candidates: [], history: [], histOpen: -1, histMax: 12, shiftState: 0,
     pendingUndo: '', pendingUndoEntry: null, undoGen: -1,
     targetGen: 0, staleMs: 300000,             // IBus present unless a test says otherwise
-    lastGid: 0, undoTimer: { restart(){}, stop(){} },      // QML Timer stub
+    lastGid: 0, ambiguous: false, undoTimer: { restart(){}, stop(){} },      // QML Timer stub
   };
   const build = new Function('state', 'injector', 'decoder', `
     with (state) {
@@ -31,7 +31,7 @@ function makeWin() {
       return { pushHistory, trimHistory, replaceHistory, deleteHistory, correct,
                commitDecoded, deleteChar, deleteWord, tapPunct, tapSpace, typeKey,
                consumeShift, shifted, tapDeleteWord, undoDelete, clearUndo, undoWord,
-               entryLive };
+               entryLive, candsAmbiguous, commitChoice, flushAmbiguous };
     }`);
   return { state, fn: build(state, injector, decoder) };
 }
@@ -297,6 +297,77 @@ console.log('history: offsets, replacement, deletion, mirror/target sync\n');
   const gids = w.state.history.map(e => e.gid);
   check('surviving entries keep their gids', JSON.stringify(gids) === '[755217000002]',
         JSON.stringify(gids));
+}
+
+{ // --- E4: a photo-finish decode asks instead of betting (ADR-0006 review E4)
+  target = ''; const w = makeWin(); decoderCalls.length = 0;
+
+  // The threshold rule itself
+  check('gap 0.09 < 0.6 is ambiguous', w.fn.candsAmbiguous(
+    [{text:'rober',score:0.05},{text:'river',score:-0.04}], 0.6) === true);
+  check('gap 2.0 is not ambiguous', w.fn.candsAmbiguous(
+    [{text:'watter',score:0.55},{text:'water',score:-1.45}], 0.6) === false);
+  check('one candidate is never ambiguous', w.fn.candsAmbiguous([{text:'x',score:0}], 0.6) === false);
+  check('missing scores are not ambiguous', w.fn.candsAmbiguous([{text:'x'},{text:'y'}], 0.6) === false);
+
+  // A choice pending, user clicks chip 1 (the non-top-1 word)
+  w.state.lastGid = 755218000001;
+  w.state.candidates = [{text:'rober',score:0.05},{text:'river',score:-0.04}];
+  w.state.ambiguous = true;                       // what onCandidatesReady set
+  w.fn.commitChoice(1);
+  check('the clicked word commits', target === 'river ' && w.state.injected === 'river ');
+  check('the hold is released', w.state.ambiguous === false);
+  check('the corpus gets the truth as an amend',
+        JSON.stringify(decoderCalls) === '[["amend",755218000001,"river"]]',
+        JSON.stringify(decoderCalls));
+  check('the word is in history with its gid', w.state.history.length === 1 && w.state.history[0].gid === 755218000001);
+
+  // Clicking top-1 while held: commits, but no amend (the guess was right)
+  target = ''; const w2 = makeWin(); decoderCalls.length = 0;
+  w2.state.lastGid = 755218000002;
+  w2.state.candidates = [{text:'test',score:1.0},{text:'teest',score:0.6}];
+  w2.state.ambiguous = true;
+  w2.fn.commitChoice(0);
+  check('top-1 choice commits without amend',
+        target === 'test ' && decoderCalls.length === 0, target + JSON.stringify(decoderCalls));
+
+  // The user moves on instead: the hold defaults to top-1, nothing is lost
+  target = ''; const w3 = makeWin();
+  w3.state.lastGid = 755218000003;
+  w3.state.candidates = [{text:'rober',score:0.05},{text:'river',score:-0.04}];
+  w3.state.ambiguous = true;
+  w3.fn.flushAmbiguous();
+  check('flush commits the top-1', target === 'rober ' && w3.state.injected === 'rober ');
+  check('flush releases the hold', w3.state.ambiguous === false);
+
+  // Every overwriting entry point flushes first: glide, tap, space, punct,
+  // char-delete, word-delete. Spot-check the two most load-bearing.
+  const w4 = makeWin(); target = '';
+  w4.state.candidates = [{text:'rober',score:0.05},{text:'river',score:-0.04}];
+  w4.state.ambiguous = true;
+  w4.state.injected = '';
+  w4.fn.typeKey('a');
+  check('typing flushes the pending choice first', target === 'rober a', target);
+  const w5 = makeWin(); target = 'rober ';
+  w5.state.candidates = [{text:'rober',score:0.05},{text:'river',score:-0.04}];
+  w5.state.ambiguous = true;
+  w5.state.injected = 'rober ';
+  w5.fn.tapSpace();
+  check('space flushes too', target === 'rober rober  ', target);
+
+  // A held choice does not survive into the next glide's history entry
+  const w6 = makeWin(); target = '';
+  w6.state.lastGid = 755218000004;
+  w6.state.candidates = [{text:'rober',score:0.05},{text:'river',score:-0.04}];
+  w6.state.ambiguous = true;
+  w6.state.injected = '';
+  w6.fn.commitChoice(1);
+  w6.state.lastGid = 755218000005;               // next glide lands
+  w6.state.candidates = [{text:'stone',score:3.0},{text:'store',score:-1.0}];
+  w6.state.ambiguous = false;
+  w6.fn.commitDecoded('stone');
+  check('the next glide keeps its OWN gid',
+        w6.state.history[1].gid === 755218000005 && w6.state.history[0].gid === 755218000004);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

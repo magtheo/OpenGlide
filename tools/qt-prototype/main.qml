@@ -165,7 +165,10 @@ Window {
         var a = [];
         if (pendingUndo.length)      // an undo offer outranks both
             a.push({text: "↶ undo " + pendingUndo.replace(/\s+$/, ""), hist: false, undo: true, idx: -1});
-        const room = 4 - a.length;
+        // While a choice is pending (E4) only the CONTENDERS show — two equal
+        // offers, not four — and the state pill takes the freed right half to
+        // ask its question next to them (see statePill x).
+        const room = (win.ambiguous ? 2 : 4) - a.length;
         if (candidates.length > 0) {
             for (var i = 0; i < Math.min(room, candidates.length); i++)
                 a.push({text: candidates[i].text, hist: false, undo: false, idx: i});
@@ -234,17 +237,22 @@ Window {
     // decode outranks a short stroke), so it is worth testing on its own, and a
     // pure function is testable on a box with no Qt (tools/qml-logic-test).
     // Explicit arguments also make the binding's dependencies visible.
-    function noteState(dead, ready, drop, pend, short, stall, secs) {
+    // `ambig` (E4, ADR-0006): top-1 and top-2 finished within ambigMargin nats —
+    // the ranking is a coin flip, so the user is being asked to pick. Outranks
+    // nothing urgent (it expires the moment they act); outranks `stall`, which
+    // is idle noise by comparison.
+    function noteState(dead, ready, drop, pend, short, ambig, stall, secs) {
         if (dead)   return {text: "decoder stopped — restart",   problem: true};
         if (!ready) return {text: "loading decoder… " + secs + " s", problem: false};
         if (drop)   return {text: "busy — glide again",           problem: true};
         if (pend)   return {text: "decoding…",                    problem: false};
         if (short)  return {text: "too short — glide further",    problem: true};
+        if (ambig)  return {text: "close match — click a word",   problem: true};
         if (stall)  return {text: "decode stalled — glide again", problem: true};
         return {text: "", problem: false};
     }
     readonly property var note: noteState(decoderDead, decoder.ready, dropped,
-                                          pending, lastShort, timedOut, warmupSecs)
+                                          pending, lastShort, ambiguous, timedOut, warmupSecs)
     readonly property string stateNote: note.text
     // Waiting vs. something-went-wrong. Only the colour and the icon differ, but
     // the distinction is the whole point: "decoding…" asks for patience, the
@@ -272,6 +280,7 @@ Window {
     // message that rendered only in diagnostics. Returns the outcome so the rule
     // can be asserted without Qt.
     function glideFinished(points) {
+        flushAmbiguous();                  // an unanswered choice defaults to top-1
         if (points.length < 4) { noteShort(); return "short"; }
         lastShort = false;
         candidates = [];
@@ -287,6 +296,47 @@ Window {
         pending = true;
         watchdog.restart();
         return "decoding";
+    }
+
+    // ======================= E4: score margin → behaviour =======================
+    // The diagnose tally left exactly one miss at bonus-off (river/riber losing
+    // to rober by 0.09 nats) and the review's E4 said what to do with it: a
+    // margin that small should change BEHAVIOUR, not just ranking. When top-1
+    // and top-2 finish within ambigMargin nats the decoder is saying "coin
+    // flip" — auto-committing the winner bets the user's text on that coin.
+    // Instead: commit nothing, show the chips, let one click pick. The next
+    // input event (glide, tap, space, backspace…) flushes top-1 first, so
+    // ignoring the question costs nothing vs today — but answering it turns a
+    // wrong commit into a right one. Measured on the 39-glide A/B: every
+    // wrong-commit case with gap < 0.6 was a true flip; 0.6 is the default.
+    readonly property real ambigMargin: 0.6
+    property bool ambiguous: false       // a choice is pending (see candsAmbiguous)
+    // Pure, so the threshold rule is testable without Qt. Scores come from the
+    // bridge (candidates[i].score, nats); missing scores (hand-built tests) =
+    // not ambiguous.
+    function candsAmbiguous(cands, margin) {
+        if (cands.length < 2) return false;
+        if (typeof cands[0].score !== "number" || typeof cands[1].score !== "number") return false;
+        return (cands[0].score - cands[1].score) < margin;
+    }
+    // A chip was clicked while a choice was pending: commit THAT word. Picking
+    // a non-top-1 word is also the corpus truth for the glide — amend the
+    // record so the label is what the user meant, not the coin flip.
+    function commitChoice(i) {
+        if (!ambiguous || i < 0 || i >= candidates.length) return;
+        const word = candidates[i].text, top1 = candidates[0].text;
+        ambiguous = false;
+        commitDecoded(word);
+        if (word !== top1 && lastGid) decoder.amendRecord(lastGid, word.toLowerCase());
+    }
+    // The user moved on without picking: behave exactly as before E4 — commit
+    // top-1 — then whatever they did proceeds. Every entry point that would
+    // overwrite the pending question calls this first, so no word is ever lost
+    // and no question outlives its moment.
+    function flushAmbiguous() {
+        if (!ambiguous) return;
+        ambiguous = false;
+        if (candidates.length > 0) commitDecoded(candidates[0].text);
     }
 
     function stateText() {
@@ -463,15 +513,17 @@ Window {
         if (e.gid) decoder.dropRecord(e.gid);
     }
     function typeKey(c) {
+        flushAmbiguous();               // typing = moving on: default the choice
         clearUndo();
         const ch = shifted(c);
         injector.typeChar(ch);
         injected += ch;
         consumeShift();
     }
-    function tapSpace() { clearUndo(); injector.typeChar(" "); injected += " "; }
+    function tapSpace() { flushAmbiguous(); clearUndo(); injector.typeChar(" "); injected += " "; }
     function tapEnter() { injector.typeChar("\n"); injected += "\n"; }
     function tapPunct(p) {                       // collapse a preceding space, then "p "
+        flushAmbiguous();
         clearUndo();
         if (injected.length && injected[injected.length - 1] === " ") {
             injector.backspace(1);
@@ -482,6 +534,7 @@ Window {
         trimHistory();          // the collapsed space moved everything after it
     }
     function deleteChar() {
+        flushAmbiguous();               // backspace = moving on too
         if (!injected.length) return;
         clearUndo();
         candidates = [];                  // editing invalidates the last glide's suggestions
@@ -491,6 +544,7 @@ Window {
     }
     function deleteWord() {                      // backspace-swipe: trailing spaces + one word
         if (!injected.length) return "";
+        flushAmbiguous();
         clearUndo();          // tapDeleteWord re-stages after this returns
         candidates = [];
         var i = injected.length, n = 0;
@@ -512,6 +566,7 @@ Window {
     // the deletion (with its history entry, so the alternatives come back too)
     // and offer it as a chip until it times out.
     function tapDeleteWord() {
+        flushAmbiguous();
         const hBefore = history;
         const s = deleteWord();
         if (!s.length) return;
@@ -757,7 +812,13 @@ Window {
             Rectangle {
                 id: statePill
                 visible: win.stateNote.length > 0
-                x: win.u * 0.36; y: parent.height * 0.14
+                // Normally the pill borrows the two LEFTmost slots (candidates
+                // are always empty while a note shows). While a choice is
+                // pending the chips ARE the question, so only the contenders
+                // show (chromeSlots room=2) and the pill takes the freed right
+                // half — "close match — click a word" sits beside its answers.
+                x: win.ambiguous ? win.u * 3.62 : win.u * 0.36
+                y: parent.height * 0.14
                 width: win.u * 3.20; height: parent.height * 0.72
                 radius: height / 2
                 color: "transparent"
@@ -809,15 +870,20 @@ Window {
                     readonly property var slot: index < win.chromeSlots.length ? win.chromeSlots[index] : null
                     readonly property bool isHist: slot ? slot.hist : false
                     readonly property bool isUndo: slot ? slot.undo === true : false
+                    // While a choice is pending (E4) top-1 is NOT the answer — it
+                    // is one of four equal offers, so it loses the filled style.
                     readonly property bool isTop: slot && !slot.hist && !slot.undo && slot.idx === 0
+                                                  && !win.ambiguous
                     x: win.u * (0.36 + index * 1.63); y: parent.height * 0.14
                     width: win.u * 1.57; height: parent.height * 0.72
                     radius: height / 2
-                    // The two left slots yield to the state pill while it shows.
+                    // The two left slots yield to the state pill while it shows —
+                    // EXCEPT while a choice is pending, when they hold the answers
+                    // and the pill has moved right instead (see statePill x).
                     // An undo offer lands in slot 0, so a note briefly hides it —
                     // it comes back on its own when the note expires, since both
                     // are bindings and the 8 s undo window outlives the 2.6 s note.
-                    visible: slot !== null && !(win.stateNote.length > 0 && index < 2)
+                    visible: slot !== null && !(win.stateNote.length > 0 && index < 2 && !win.ambiguous)
                     color: isTop ? pal.accent : (isHist || isUndo ? "transparent" : "#ffffff")
                     border.color: isUndo ? pal.accent : (isHist ? pal.muted : "#dadce0")
                     border.width: isTop ? 0 : (isUndo ? 2 : 1)
@@ -841,9 +907,12 @@ Window {
                             } else if (parent.slot.hist) {
                                 win.histOpenX = parent.x;
                                 win.histOpen = win.histOpen === parent.slot.idx ? -1 : parent.slot.idx;
+                            } else if (win.ambiguous) {
+                                win.commitChoice(parent.slot.idx);
                             } else {
                                 win.correct(parent.slot.idx);
                             }
+                        }
                         }
                     }
                 }
@@ -1564,7 +1633,11 @@ Window {
             // behind; the word landing is the answer to it, so clear it rather
             // than letting it sit there contradicting the fresh candidates.
             win.dropped = false;
-            if (candidates.length > 0) win.commitDecoded(candidates[0].text);
+            // E4: a photo-finish between the top two is a question, not an
+            // answer — hold the commit and let a click decide (flushAmbiguous
+            // defaults to top-1 on the next input, so ignoring it is free).
+            win.ambiguous = win.candsAmbiguous(candidates, win.ambigMargin);
+            if (candidates.length > 0 && !win.ambiguous) win.commitDecoded(candidates[0].text);
         }
         function onDecoderDied() {
             watchdog.stop();

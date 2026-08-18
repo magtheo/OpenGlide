@@ -94,6 +94,15 @@ public:
     void set_double_bonus(float b) { double_bonus_ = b; }
     void set_max_doublings(int n)  { max_doublings_ = n < 0 ? 0 : n; }
 
+    // Alph gate (G1, ADR-0006): a word is scored only if every one of its
+    // letters appears in some timestep's top-K emissions. K=3 shipped; the
+    // diagnose tally showed it is the harshest prune (a 7-letter word gets 7
+    // independent chances to be erased, and truncated glides die here — the
+    // `window`/greedy-"wi" miss is alph-pruned, not length-pruned). Wider K
+    // costs trie-walk breadth, not correctness of the CTC arithmetic. Tunable
+    // so the widening can be A/B'd on the corpus before it ships.
+    void set_alph_topk(int k) { alph_topk_ = k < 1 ? 1 : (k > 26 ? 26 : k); }
+
 private:
     std::unique_ptr<executorch::extension::Module> mod_;
     size_t n_words_ = 0;          // dict size (trie word-ends), for the ready log
@@ -105,6 +114,7 @@ private:
     double user_lambda_ = 2.0;       // prior weight for the user's own words
     float  double_bonus_  = 4.5f;    // per collapsed pair (see set_double_bonus)
     int    max_doublings_ = 2;       // 1 = the old behaviour
+    int    alph_topk_     = 3;       // per-timestep letter survival set (see set_alph_topk)
     std::string user_freq_path_;
 
     // --- Prefix-shared CTC decode over a dictionary trie ---

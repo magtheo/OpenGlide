@@ -293,6 +293,15 @@ and the doubles that already recover must survive; `help` must still not win whe
 >
 > Caveat carried from RESULTS.md: the live-24 glides that motivated the bonus
 > were never persisted; re-capture (row 1) before deleting it outright.
+>
+> **Measured update (later the same day) — row 2's G1 half is now measured
+> NET-NEGATIVE.** `--alph K` A/B over all three corpora (RESULTS.md "G1 alph
+> A/B"): widening changes nothing on controlled/daily, costs 8 pp on live, and
+> `window` stays alph-pruned at K=6 — a truncated stroke never emitted those
+> letters at any rank, so no K recovers it. Keep K=3; truncated glides are a
+> data problem ("too short — glide further" is the fix), not a gate problem.
+> Row 0.5's E4 margin instead SHIPPED: gap < 0.6 nats between top-1/top-2 now
+> holds the commit and offers the contenders as chips.
 
 ---
 

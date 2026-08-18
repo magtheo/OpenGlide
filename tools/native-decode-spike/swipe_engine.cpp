@@ -296,8 +296,8 @@ std::vector<Candidate> SwipeEngine::decode(const std::vector<SwipePoint>& pts, s
         if (c != prev && c != BLANK && c < 26) g.push_back(L[c]);
         prev = c;
         int idx[26]; for (int v = 0; v < 26; v++) idx[v] = v;
-        std::partial_sort(idx, idx + 3, idx + 26, [&](int a, int b) { return row[a] > row[b]; });
-        for (int k = 0; k < 3; k++) alph[idx[k]] = true;
+        std::partial_sort(idx, idx + alph_topk_, idx + 26, [&](int a, int b) { return row[a] > row[b]; });
+        for (int k = 0; k < alph_topk_; k++) alph[idx[k]] = true;
     }
     if (greedy_out) *greedy_out = g;
 

@@ -12,7 +12,9 @@ WANT = {"pushHistory", "trimHistory", "replaceHistory", "deleteHistory", "correc
         "typeKey", "consumeShift", "shifted", "tapDeleteWord", "undoDelete",
         "clearUndo", "undoWord", "entryLive",
         # the visible-state machine (state_test.js)
-        "noteState", "noteShort", "glideFinished"}
+        "noteState", "noteShort", "glideFinished",
+        # the E4 margin machine (history_test.js)
+        "candsAmbiguous", "commitChoice", "flushAmbiguous"}
 
 def strip_comment(line):
     q = line.find('//')
