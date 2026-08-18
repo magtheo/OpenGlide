@@ -533,19 +533,28 @@ mismatch by construction: they ARE the personalized decode's answers).
   until gold (chip-corrected) volume grows.
 
 **E4 ships: score margin → behaviour.** When top-1 and top-2 finish within
-`ambigMargin` (0.6 nats default), the keyboard no longer auto-commits: the two
-contenders show as equal-weight chips, the state pill moves to the freed right
-half and says "close match — click a word", and the next input event (glide,
-tap, space, backspace, word-delete) flushes top-1 first — so ignoring the
-question behaves exactly like today, answering it turns a coin-flip commit
-into a chosen one. A non-top-1 click also amends the glide's corpus record
-(the choice is the label). Threshold evidence: on the 39-glide A/B every
-wrong-commit with gap < 0.6 was a true flip (`oppen` 0.35, `mousee` 0.34,
-`watter` 0.56) and no correct commit sat that close. Logic suites: history
+`ambigMargin` (1.0 nats, see the margin sweep below), the keyboard no longer
+auto-commits: the two contenders show as equal-weight chips, the state pill
+moves to the freed right half and says "close match — click a word", and the
+next input event (glide, tap, space, backspace, word-delete) flushes top-1
+first — so ignoring the question behaves exactly like today, answering it
+turns a coin-flip commit into a chosen one. A non-top-1 click also amends the
+glide's corpus record (the choice is the label). Logic suites: history
 **104** (threshold rule, choice-commits-and-amends, flush-on-every-entry-point,
 per-glide gid integrity), state **43** (ambig precedence: short > ambig >
-stalled). Built and launched on the KDE box; the hold's live look still needs
-a real photo-finish glide to eyeball.
+stalled). Built and launched on the KDE box.
+
+**Margin sweep (41 live glides, 7 gold amends).** Replayed the recorded
+top-2 gaps against the amends: 0.6 held 8 / saved 2; **1.0 held 11 / saved 3**
+(0.6 missed the tink→think class, gap 0.89); 1.5 held 19 / saved still 3; 2.0's
+4th "save" (wl→well, gap 1.70) was unreachable — truth ranked 3rd, no chip
+pair could offer it. Above ~1/4 of holds are genuinely needed; the initial
+0.6 (chosen from the 39-glide A/B's wrong commits only) was too tight, so the
+default is now 1.0. Re-tune when gold labels grow — "stood" labels are weak
+(the user may simply not have bothered). Also visible in the live data: the
+`thining` glide had thinning beat thinking ONLY via the doubling bonus (CTC
+alone favored thinking by ~3.6 nats) — the bonus A/B on gold labels remains
+open until more amends accumulate.
 
 ## How to run on another session
 ```

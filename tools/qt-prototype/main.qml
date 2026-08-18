@@ -307,9 +307,12 @@ Window {
     // Instead: commit nothing, show the chips, let one click pick. The next
     // input event (glide, tap, space, backspace…) flushes top-1 first, so
     // ignoring the question costs nothing vs today — but answering it turns a
-    // wrong commit into a right one. Measured on the 39-glide A/B: every
-    // wrong-commit case with gap < 0.6 was a true flip; 0.6 is the default.
-    readonly property real ambigMargin: 0.6
+    // wrong commit into a right one. Default 1.0 nats, tuned on the live corpus
+    // (RESULTS.md "margin sweep"): 0.6 missed the tink->think class (0.89), and
+    // above 1.0 no additional save was chip-reachable — the next corrected glide
+    // (wl->well, gap 1.70) had its truth ranked 3rd, so no pair of chips could
+    // offer it. At 1.0: 3 saves / 11 holds on 41 recorded glides.
+    readonly property real ambigMargin: 1.0
     property bool ambiguous: false       // a choice is pending (see candsAmbiguous)
     // Pure, so the threshold rule is testable without Qt. Scores come from the
     // bridge (candidates[i].score, nats); missing scores (hand-built tests) =
