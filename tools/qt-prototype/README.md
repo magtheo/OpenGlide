@@ -128,7 +128,14 @@ stderr, check `journalctl --user`.
 - **Content logging** is `OPENGLIDE_LOG_CONTENT=1` (alias: `OPENGLIDE_KEY_DEBUG`).
   It prints every key you press to stderr and announces itself loudly — it is a
   keystroke log, so it is per-session, never persisted, never on by default
-  (ADR-0004 amendment).
+  (ADR-0004 amendment). **The same opt-in also records glides to a corpus**
+  (ADR-0006 step 1): every decoded glide appends `points + candidates + greedy`
+  to `~/.local/share/openglide/corpus-live.jsonl`, chip corrections append
+  `amend_of` lines naming the true word, chip deletes append `drop_of`. The
+  banner says where the file is and that deleting it is always fine — it
+  contains what you typed. `../native-decode-spike/fold_corpus.py` folds the
+  amendments into labeled records and emits the flat TSV `corpus_test` scores;
+  see data-formats.md "Live corpus" for the line schemas.
 - **⌫**: tap = delete the last **word** (undoable — an "↶ undo word" chip appears in
   the chrome for 8 s — labelled as an action, since a bare "↶ word" read as a
   strange suggestion and restores the word *and* its alternatives); hold = one

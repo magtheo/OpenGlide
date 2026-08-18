@@ -98,6 +98,7 @@ Window {
     property var    candidates: []
     property string greedyText: ""
     property real   decMs: 0.0
+    property real   lastGid: 0     // id of the newest glide's corpus record (0 = none)
     property bool   pending: false
     property bool   lastShort: false
     property bool   timedOut: false
@@ -387,14 +388,14 @@ Window {
         injected += w + " ";
         decoder.bumpWord(word);     // personalization keys on the dictionary form
         consumeShift();
-        pushHistory(w, candidates, start);
+        pushHistory(w, candidates, start, lastGid);
     }
 
     // ================= recent-word history (spec §9.3) =================
-    function pushHistory(text, cands, start) {
+    function pushHistory(text, cands, start, gid) {
         var h = history.slice();
         h.push({text: text, cands: cands, start: start, len: text.length,
-                gen: targetGen, t: Date.now()});   // which target this belongs to
+                gen: targetGen, t: Date.now(), gid: gid || 0});   // which target this belongs to
         while (h.length > histMax) h.shift();
         history = h;
     }
@@ -428,13 +429,16 @@ Window {
         const delta = newText.length - e.len;
         var h = history.slice();
         h[hi] = {text: newText, cands: e.cands, start: e.start, len: newText.length,
-                 gen: e.gen, t: e.t};
+                 gen: e.gen, t: e.t, gid: e.gid};
         for (var j = hi + 1; j < h.length; j++)
             h[j] = {text: h[j].text, cands: h[j].cands, start: h[j].start + delta,
-                    len: h[j].len, gen: h[j].gen, t: h[j].t};
+                    len: h[j].len, gen: h[j].gen, t: h[j].t, gid: h[j].gid};
         history = h;
         histOpen = -1;
         decoder.bumpWord(newText.toLowerCase());   // the user chose this — boost it
+        // ...and the corpus gets the truth: this glide's top-1 was wrong and the
+        // user said so. This is the label that makes recorded data trustworthy.
+        if (e.gid) decoder.amendRecord(e.gid, newText.toLowerCase());
     }
     function deleteHistory(hi) {
         if (hi < 0 || hi >= history.length) return;
@@ -451,10 +455,12 @@ Window {
         h.splice(hi, 1);
         for (var j = hi; j < h.length; j++)
             h[j] = {text: h[j].text, cands: h[j].cands, start: h[j].start + delta,
-                    len: h[j].len, gen: h[j].gen, t: h[j].t};
+                    len: h[j].len, gen: h[j].gen, t: h[j].t, gid: h[j].gid};
         history = h;
         histOpen = -1;
         candidates = [];
+        // The corpus must not keep a top-1 label for a word the user threw away.
+        if (e.gid) decoder.dropRecord(e.gid);
     }
     function typeKey(c) {
         clearUndo();
@@ -521,7 +527,7 @@ Window {
         injector.commitExact(pendingUndo);
         injected += pendingUndo;
         if (pendingUndoEntry)
-            pushHistory(pendingUndoEntry.text, pendingUndoEntry.cands, start);
+            pushHistory(pendingUndoEntry.text, pendingUndoEntry.cands, start, pendingUndoEntry.gid || 0);
         clearUndo();
     }
     function clearUndo() {
@@ -1549,9 +1555,10 @@ Window {
 
     Connections {
         target: decoder
-        function onCandidatesReady(greedy, candidates, ms) {
+        function onCandidatesReady(greedy, candidates, ms, gid) {
             watchdog.stop();
             win.greedyText = greedy; win.candidates = candidates; win.decMs = ms;
+            win.lastGid = gid || 0;
             win.pending = false; win.timedOut = false;
             // A glide refused while this one was in flight left a "busy" note
             // behind; the word landing is the answer to it, so clear it rather

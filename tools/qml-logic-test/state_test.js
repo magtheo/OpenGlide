@@ -31,7 +31,7 @@ function makeWin(opts = {}) {
   const decoder = {
     ready: opts.ready !== false,
     busy: opts.busy === true,
-    bumpWord: () => {},
+    bumpWord: () => {}, amendRecord: () => {}, dropRecord: () => {},
     // Mirrors DecoderBridge::decode — FALSE means refused, nothing will be emitted.
     decode(pts) { calls.decode++; return this.ready && !this.busy; },
   };

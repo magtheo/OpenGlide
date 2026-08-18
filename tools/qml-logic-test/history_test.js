@@ -11,14 +11,19 @@ const injector = {
   commitExact: s => { target += s; },
   typeChar:    c => { target += c; },
 };
-const decoder = { bumpWord: () => {} };
+const decoderCalls = [];   // amendRecord/dropRecord(gid, word) log — corpus labels ride on these
+const decoder = {
+  bumpWord: () => {},
+  amendRecord: (gid, w) => decoderCalls.push(["amend", gid, w]),
+  dropRecord: (gid)     => decoderCalls.push(["drop", gid]),
+};
 
 function makeWin() {
   const state = {
     injected: '', candidates: [], history: [], histOpen: -1, histMax: 12, shiftState: 0,
     pendingUndo: '', pendingUndoEntry: null, undoGen: -1,
     targetGen: 0, staleMs: 300000,             // IBus present unless a test says otherwise
-    undoTimer: { restart(){}, stop(){} },      // QML Timer stub
+    lastGid: 0, undoTimer: { restart(){}, stop(){} },      // QML Timer stub
   };
   const build = new Function('state', 'injector', 'decoder', `
     with (state) {
@@ -269,6 +274,29 @@ console.log('history: offsets, replacement, deletion, mirror/target sync\n');
   w.fn.undoDelete();
   check('undo REFUSES into a different target', w.state.injected === before && target === buf);
   check('  and the stale offer is cleared', w.state.pendingUndo === '');
+}
+
+{ // --- corpus amendments: a correction names the glide it corrects (ADR-0006 step 1)
+  target = ''; const w = makeWin(); decoderCalls.length = 0;
+  w.state.lastGid = 755217000001;                 // what candidatesReady(gid) set
+  glide(w, 'stone', ['store', 'atone']);          // commits top-1 "stone", gid 755217000001
+  w.state.lastGid = 755217000002;
+  glide(w, 'river', ['rover']);                   // commits "river", gid 755217000002
+  check('glides record no amendments by themselves', decoderCalls.length === 0);
+  w.fn.replaceHistory(0, 'store');                // correct the OLDER word
+  check('correction amends the right glide',
+        JSON.stringify(decoderCalls) === '[["amend",755217000001,"store"]]',
+        JSON.stringify(decoderCalls));
+  w.fn.replaceHistory(1, 'rover');                // then the newer one
+  check('second correction amends its own glide',
+        decoderCalls.length === 2 && decoderCalls[1][0] === "amend" && decoderCalls[1][1] === 755217000002);
+  w.fn.deleteHistory(0);                          // deleting marks, not amends
+  check('delete DROPS its record (intent unknown)',
+        decoderCalls.length === 3 && decoderCalls[2][0] === "drop" && decoderCalls[2][1] === 755217000001,
+        JSON.stringify(decoderCalls));
+  const gids = w.state.history.map(e => e.gid);
+  check('surviving entries keep their gids', JSON.stringify(gids) === '[755217000002]',
+        JSON.stringify(gids));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

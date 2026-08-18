@@ -471,6 +471,35 @@ outright, re-capture real glides (step 1) or gate it on CTC dwell evidence
 (review §3 E3's elision model). Latency: cap 0 vs 2 within noise (~440–475 ms
 avg, dominated by trie DFS width, not the bonus arithmetic).
 
+## Corpus-from-real-use ships (2026-08-18) — ADR-0006 step 1 / review row 1
+
+The feature the doubling-bonus decision was blocked on: the app now grows its
+own labeled corpus from real use. `OPENGLIDE_LOG_CONTENT=1` (the ADR-0004
+content opt-in — a corpus IS user content) makes every decoded glide append
+`{glide_id, target(top-1 guess), greedy, layout_id, points, candidates,
+selected, decode_ms}` to `~/.local/share/openglide/corpus-live.jsonl`. Labels
+become trustworthy through the edit paths: a chip correction appends
+`{"amend_of": gid, "selected": word}` (QML carries the glide id through every
+history mutation, including shifts from later edits and undo restore); a chip
+delete appends `{"drop_of": gid}` — wrong top-1, intent unknown. Backspace-
+retype is not attributed (nothing emitted). `fold_corpus.py` merges amends,
+flags drops, and emits the folded JSONL + the flat TSV `corpus_test` reads.
+
+**Verified on hardware (KDE box, live window):** real glides landed as full
+records (points/time_us, top-5 candidates with scores, greedy); fold_corpus
+consumed the file and produced a corpus_test-ready TSV. Logic suites:
+history 85 → **90** (new: amend fires on the corrected glide only, drop fires
+on delete, gids survive shifts) and state 41, all green. A `selected:null`
+bug (QJsonValueRef cross-assignment) was caught by the first live records and
+fixed before commit.
+
+**Not yet verified:** an amend line from a real chip click (the QML→bridge
+path is unit-covered; the JSON append machinery is the same one the live
+glides just exercised). **Label strength, stated plainly:** only chip-corrected
+glides are gold; unamended survivors mean "the user let it stand", and
+backspace-retyped words stay mislabeled — use `fold_corpus.py --corrected`
+when labels must be certain.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make

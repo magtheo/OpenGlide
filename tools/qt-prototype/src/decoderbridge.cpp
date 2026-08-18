@@ -2,6 +2,7 @@
 #include "swipe_engine.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <cstdio>
 #include <QDir>
 #include <QFile>
@@ -118,6 +119,22 @@ bool DecoderBridge::loadLayout(const QString &path) {
 }
 
 DecoderBridge::DecoderBridge(QObject *parent) : QObject(parent) {
+    // Corpus-from-real-use (ADR-0006 step 1): glides are recorded under the same
+    // content opt-in as keystroke logging (ADR-0004) — a recorded corpus IS user
+    // content. Unlike the stderr key log this writes a FILE that outlives the
+    // session, so say so loudly and say where it is.
+    {
+        const QByteArray v = qgetenv("OPENGLIDE_LOG_CONTENT");
+        const QByteArray a = qgetenv("OPENGLIDE_KEY_DEBUG");
+        m_record = ((!v.isEmpty() && v != "0") || (!a.isEmpty() && a != "0"));
+        if (m_record)
+            std::fprintf(stderr,
+                "*** OPENGLIDE CORPUS RECORDING IS ON ***\n"
+                "    Every glide (points + candidates + your corrections) is\n"
+                "    appended to ~/.local/share/openglide/corpus-live.jsonl.\n"
+                "    That file contains what you typed — delete it any time.\n"
+                "    Unset OPENGLIDE_LOG_CONTENT and restart to stop recording.\n\n");
+    }
     // Load synchronously (~0.1-0.3 s: model load is ~0.1 ms; dictionary load
     // dominates). Brief, at startup, before the window is interactive.
     m_eng = std::make_shared<SwipeEngine>(resolveModel().toStdString(),
@@ -158,6 +175,61 @@ void DecoderBridge::bumpWord(const QString &word) {
     if (m_eng) m_eng->bump(word.toStdString());
 }
 
+void DecoderBridge::appendLine(const QByteArray &line) {
+    std::lock_guard<std::mutex> lk(m_recMutex);
+    QDir d(QDir::homePath() + "/.local/share/openglide");
+    d.mkpath(".");
+    QFile f(d.absoluteFilePath("corpus-live.jsonl"));
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Append)) return;
+    f.write(line);
+    f.write("\n");
+}
+
+void DecoderBridge::recordGlide(qint64 gid, const std::string &greedy,
+                                const std::vector<Candidate> &cands,
+                                const std::vector<SwipePoint> &pts, double ms) {
+    if (!m_record) return;
+    // data-formats.md corpus schema, plus glide_id and greedy. `target` is the
+    // best guess at decode time (top-1); amendRecord lines carry the user's
+    // corrections and fold_corpus.py merges them — a corpus label is only
+    // trustworthy once it survived (or was corrected by) the user.
+    QJsonObject root;
+    root["schema_version"] = 1;
+    root["glide_id"] = (double)gid;        // epoch ms — exact as a double
+    const QString top1 = cands.empty() ? QString()
+                                        : QString::fromStdString(cands[0].text);
+    root["target"] = top1;
+    root["layout_id"] = m_layoutId;
+    root["greedy"] = QString::fromStdString(greedy);
+    QJsonArray pa;
+    for (const SwipePoint &p : pts)
+        pa.append(QJsonObject{{"x", (double)p.x}, {"y", (double)p.y},
+                              {"time_us", (double)p.t * 1000.0}});
+    root["points"] = pa;
+    QJsonArray ca;
+    for (const Candidate &c : cands)
+        ca.append(QJsonObject{{"text", QString::fromStdString(c.text)},
+                              {"score", (double)c.score},
+                              {"source", "SwipeEngine"}});
+    root["candidates"] = ca;
+    root["selected"] = top1;
+    root["decode_ms"] = ms;
+    appendLine(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+void DecoderBridge::amendRecord(qint64 gid, const QString &word) {
+    if (!m_record || gid <= 0) return;
+    appendLine(QJsonDocument(QJsonObject{
+        {"amend_of", (double)gid}, {"selected", word.toLower()}
+    }).toJson(QJsonDocument::Compact));
+}
+
+void DecoderBridge::dropRecord(qint64 gid) {
+    if (!m_record || gid <= 0) return;
+    appendLine(QJsonDocument(QJsonObject{{"drop_of", (double)gid}}
+    ).toJson(QJsonDocument::Compact));
+}
+
 bool DecoderBridge::decode(const QVariantList &points) {
     if (!m_ready || !m_eng) return false;
     // Stale-discard (ADR-0003): drop a new glide if a decode is still running.
@@ -176,7 +248,8 @@ bool DecoderBridge::decode(const QVariantList &points) {
     }
     // Capture a shared_ptr to the engine so a worker outlives any destructor.
     std::shared_ptr<SwipeEngine> eng = m_eng;
-    std::thread([this, eng, pts = std::move(pts)]() {
+    const qint64 gid = QDateTime::currentMSecsSinceEpoch();
+    std::thread([this, eng, pts = std::move(pts), gid]() {
         std::string greedy;
         const auto t0 = std::chrono::steady_clock::now();
         std::vector<Candidate> cands = eng->decode(pts, &greedy);
@@ -185,6 +258,7 @@ bool DecoderBridge::decode(const QVariantList &points) {
         std::fprintf(stderr, "[decode] greedy=\"%s\" %.0fms:", greedy.c_str(), ms);
         for (const Candidate &c : cands) std::fprintf(stderr, " %s(%.2f)", c.text.c_str(), c.score);
         std::fputc('\n', stderr);
+        recordGlide(gid, greedy, cands, pts, ms);
         QVariantList ql;
         for (const Candidate &c : cands) {
             QVariantMap vm;
@@ -193,9 +267,9 @@ bool DecoderBridge::decode(const QVariantList &points) {
             ql.append(vm);
         }
         const QString g = QString::fromStdString(greedy);
-        QMetaObject::invokeMethod(this, [this, g, ql, ms]() {
+        QMetaObject::invokeMethod(this, [this, g, ql, ms, gid]() {
             m_busy = false;
-            emit candidatesReady(g, ql, ms);
+            emit candidatesReady(g, ql, ms, gid);
         }, Qt::QueuedConnection);
     }).detach();
     return true;

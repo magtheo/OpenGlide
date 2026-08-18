@@ -83,6 +83,32 @@ Recognition regression set (spec §24.2). One JSON object per line:
 `timing` mirrors `SwipeEngine::Timing` (ADR-0003), so corpus runs double as
 latency samples.
 
+### Live corpus — `~/.local/share/openglide/corpus-live.jsonl`
+
+Corpus-from-real-use (ADR-0006 step 1). Appended by the Qt prototype when
+`OPENGLIDE_LOG_CONTENT=1` (the ADR-0004 content opt-in — a recorded corpus IS
+user content; the app announces the file loudly at startup). Three line types:
+
+```json
+{"glide_id": 1787035301348, "schema_version": 1, "target": "test",
+ "greedy": "test", "layout_id": "en_qwerty_v1", "points": [...],
+ "candidates": [...], "selected": "test", "decode_ms": 41.9}
+{"amend_of": 1787035301348, "selected": "test"}
+{"drop_of": 1787035301348}
+```
+
+- `glide_id` is epoch-ms at decode start (unique: decodes are serialized).
+- A glide line's `target`/`selected` are the **top-1 guess, not a label** — the
+  guess is the thing being measured. Trustworthy labels come from the app's
+  edit paths: a chip **correction** appends an `amend_of` line naming the true
+  word; a chip **delete** appends `drop_of` (the top-1 was wrong; intent
+  unknown). Backspace-retyping is not attributed and emits nothing.
+- `fold_corpus.py` (native-decode-spike) merges amendments, marks drops, and
+  emits both this JSONL schema (with `corrected`/`deleted` flags) and the flat
+  TSV `corpus_test` reads. `--corrected` selects only chip-corrected glides
+  (gold labels); unamended survivors are "user let it stand" labels — weaker,
+  but real.
+
 ## SQLite schema — `storage/migrations/`
 Numbered, applied in order, recorded in `schema_migrations`.
 
