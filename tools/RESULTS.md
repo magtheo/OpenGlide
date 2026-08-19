@@ -556,6 +556,198 @@ default is now 1.0. Re-tune when gold labels grow — "stood" labels are weak
 alone favored thinking by ~3.6 nats) — the bonus A/B on gold labels remains
 open until more amends accumulate.
 
+## ADR-0006 layer 2 probe: context rescoring — real signal, and a real risk (2026-08-18)
+
+First probe of n-gram context rescoring (`tools/native-decode-spike/context_rescore.h`
++ `context_rescore_probe.py`), per ADR-0006's "ship as probes first" gate. Two
+prerequisites landed first: (1) `corpus-live.jsonl` glide records now carry a
+`context` field — the last 1-2 committed words at glide start (`decoderbridge.cpp`,
+`main.qml`) — because every corpus before this recorded isolated words with no
+sequence data, so a re-ranker had nothing real to be measured against; (2) bigram
+counts from Norvig's `count_2w.txt` (Google Books Ngrams, 286k pairs), same
+lineage as the existing `word_freq.txt` unigram list. Rescoring is a log-linear
+blend matching how `swipe_engine.cpp` already combines CTC + `user_lambda_`:
+`combined = ctc_score + lambda * log(bigram_count(prev, candidate) + 1)`, argmax
+wins. Empty context or a single candidate is a hard no-op (`context_rescore_test.cpp`,
+8/8 passing) — this is what makes it safe to replay over corpora that predate
+context logging.
+
+**Regression check (controlled + live, 85 glides total, 23 with context @ λ=1.0):
+5 overrides.** Inspected all 5 against the real sentence they came from
+(`corpus-live.jsonl`, chronological replay):
+- `what`→**to** (was `ti`) — confirmed correct; matches the actual user amend
+  on this exact glide.
+- `is`→**better** (was `beyer`) — confirmed correct by the literal message text
+  ("...if is beyer" = "if is better"); top-1 stood only because the user didn't
+  bother clicking (weak label, per `fold_corpus.py`'s caveat).
+- `think`→**about** (was `abit`) — plausible fix, unconfirmed (no amend either way).
+- `if`→**it** (was `is`, runner-up `its`) — genuinely ambiguous: "if it" outnumbers
+  "if is" 35.8M:157k in the bigram data, but the user's literal typed text was
+  "if is" — likely their own colloquial contraction, not a decode error at all.
+- `this`→**in** (was `im`) — **likely WRONG**, but not for the reason first
+  suspected here. Correction: an earlier draft of this entry claimed `im` (no
+  apostrophe) has zero occurrences anywhere in `count_2w.txt`, from
+  `grep -c '\tim\t' count_2w.txt` → 0 — that grep is simply wrong for this file
+  format (`word1 word2\tcount`, a SPACE before word2, tab only before the
+  count), so it could never match `im` as a second word regardless of whether
+  it's there. `grep -P '^im '`/`' im\t'` show `im` is well represented ("im a"
+  649277-scale, "but im" high-count too). The real, narrower issue in this one
+  case: this specific `context`→`im` pairing is sparse in a formal-text corpus
+  (Google Books Ngrams), and no ground truth exists for it here (the source
+  text was test input, not real usage) — a genuine sparsity gap for one
+  pairing, not the structural "casual contractions are invisible" problem this
+  entry originally claimed.
+
+**This is a new failure mode, not the old frequency-prior trap** (F-prior:
+wrong word always wins on raw frequency; solved by conditioning on context).
+Here context conditioning works — the problem is the context *source*'s
+register doesn't match the product's actual users. Zero-count is being read as
+"evidence against," when for informal words it usually just means "formal
+corpus never had a reason to write this down."
+
+**Not shipping to the product decoder yet** (per the ADR's acceptance gate: no
+regressions). Before it can: either (a) treat a zero bigram count as *no
+evidence* rather than a strong negative — e.g. require the challenger to clear
+an absolute count floor, not just beat the incumbent's (possibly-zero) count —
+or (b) prefer a bigram table built from the user's own committed sequences
+(the `context` field now being logged IS that data, growing in the right
+register) over the static formal one, the same personalization move already
+made for unigrams (`user_lambda_`). (b) is the more principled fix and reuses
+existing infrastructure; worth prototyping before (a).
+
+## Unknown-word penalty: why "wl" beat "well", and what actually fixes it (2026-08-19)
+
+User report: the E4 ambiguous chip row offered "wl" as a serious alternative to
+"well." `wl` is a real dictionary entry — literally in `/usr/share/dict/words`
+(Fedora's system dictionary, the decode lexicon: 374,819 words) — but it is
+system-dictionary junk, one of **1,181 pure two-letter "words"** in that list
+(`aa`, `ab`, `ac`, ..., `wl`, `wk`, ...), mostly abbreviations/archaic debris,
+not things anyone swipes on purpose. The decoder has no way to know that: CTC
+scoring only checks trie membership, and `freq_lambda_` (which would otherwise
+say "this is obscure") ships at 0.0 — off, because turning it on previously
+made frequency dominate CTC evidence across the board (`help` always beating
+`hello` — the original frequency-prior trap this file already documents).
+
+**First design, measured and rejected:** a flat penalty on any dict entry with
+no `word_freq.txt` row. `swipe_engine.cpp`'s `score_dfs` already tracks
+`node->logfreq`; added `node->has_freq` and subtracted a flat
+`unknown_word_penalty_` when absent. Swept `--unknown-penalty 0..4` against
+`fold_corpus.py`-folded `corpus-live.jsonl` (143 glides): top-1 accuracy fell
+monotonically (110 -> 110 -> 104 -> 99 -> 93 as penalty went 0 -> 1 -> 2 -> 3 ->
+4), i.e. the fix as designed cost more than it saved. Diagnosed the newly-broken
+cases: `works` (target) lost to `world` at penalty 2, because **`works` has
+zero rows in `word_freq.txt`** despite `work` having 300M+ — the frequency list
+turns out to be missing plain inflected forms of ordinary words, not just
+modern slang (an earlier, separate check already found `app`/`wifi`/`google`/
+`covid`/`github` absent too — this is the same list, same blind spot). A flat
+"no data = penalize" rule can't tell "wl" from "works"; both have no data.
+
+**Second design: gate the penalty on vowel-absence too** (`node->has_vowel`,
+computed at dict-load time: any of a/e/i/o/u). Real English words are
+essentially never vowel-free — the junk stratum is (`wl`, `wk`, and effectively
+the whole missing 2-3 letter tail: `bs`, `ch`, `cl`, `dr`... 476 missing 2-letter
+entries checked, real short words like `an`/`at`/`is`/`to` all already have
+frequency data and are untouched by either gate). Re-swept `--unknown-penalty
+0..16`: **zero new regressions on any recognizable real word at any tested
+value** — `works` is now permanently exempt (it has a vowel), and the *only*
+newly-missed targets across the whole range were `wl` (x7), `wk`, `nw`, `yr`,
+`rr` — every one of them a glide whose own recorded "target" is a bare 2-letter
+fragment with `greedy == target` exactly, i.e. corpus contamination from this
+same debugging session's own probe/test input (deliberately gliding "wl" to
+reproduce the bug), not real typing. The aggregate top-1 number still reads as
+a regression (110 -> 104 at penalty 2) but is 100% attributable to the corpus
+grading itself against exactly the bug being fixed, not to the fix breaking
+real vocabulary.
+
+**Confirmed fix, tracked case-by-case:** the reported glide (`greedy="wl"`,
+`target=well`) loses to `wl` at penalty 0 and wins from penalty >= 4 through
+16, the whole swept range, with no flip-back. A second, more garbled `well`
+glide (`greedy="wtl"`, CTC rank 5-8 behind `well` regardless of penalty) is
+**not** fixed by this lever at any value — that one is a bad geometric match
+the model itself never scored `well` close to, a different problem this lever
+correctly does not pretend to solve.
+
+**Shipped at 4.0, then measured wrong within the hour.** First shipped
+`unknown_word_penalty_ = 4.0`. User reported it was still flipping to `wl`
+roughly half the time in live use. Reconstructed the RAW (pre-penalty)
+wl-vs-well CTC gap across every occurrence in the growing live corpus
+(18 pairs by then): **-3.24 to +10.28 nats, median +5.12**. 4.0 only ever
+covered the bottom slice of that distribution — the earlier sweep that chose
+it (penalty 0-16, section above) had far fewer wl/well pairs to learn the real
+range from, and 4.0 sat right at the low end almost by chance.
+
+The width of that range (13+ nats between the low and high ends, for what a
+user experiences as "the same word, typed the same way") says the underlying
+issue isn't really "wl is obscure" so much as CTC's well-known structural bias
+toward shorter transcriptions — fewer letters means fewer commit points for
+the alignment to go wrong, so a 2-letter path can out-score a 4-letter path
+by a wide and glide-shape-dependent margin even when both are plausible reads
+of the same stroke. The vowel+frequency gate is a correctly-scoped answer to
+*which* candidates it's safe to push down (junk, never a real word missing
+from the frequency list); the penalty *magnitude* needed to actually win
+against that bias turned out to be much larger, and more variable, than the
+first measurement suggested. A general fix for the underlying length bias
+(e.g. a small per-emitted-letter reward, the mirror image of a CTC blank
+preference) would help this class of case everywhere, not just wl/well —
+that's a separate, bigger lever than this one and hasn't been scoped or
+measured.
+
+Re-swept `--unknown-penalty` 10-20 against the enlarged corpus (150 glides):
+**identical miss set at every value in that range** (same contaminated
+2-letter test-glide targets as before — nw/rr/wk/wl/yr — zero real words).
+**Shipped: 12.0** — covers the observed max (10.28) with margin, sits inside
+the confirmed-flat/safe plateau. `decoderbridge.cpp` takes engine defaults
+as-is, same as `double_bonus_`/`max_doublings_`/`alph_topk_`, so no wiring
+needed elsewhere. `--unknown-penalty` added to `corpus_test` for future
+sweeps. Caveat carried forward: this was measured against a corpus with known
+contamination from this session's own test glides — the case-by-case tracking
+is why the number is trustworthy despite that, but a cleaner sweep once more
+organic (non-test) `ambiguous_reject`-tagged data accumulates would be worth
+re-running, and would also be the natural place to check whether 12.0 still
+holds once the gap distribution isn't dominated by one debugging session's
+repeated probing of the exact same word pair.
+
+**Still not enough — 12.0 flipped roughly half the time in continued live
+use.** User pushback: "can we just have a strict feature on what the
+dictionaries are used... instead of just using all dictionaries on the
+computer" — i.e. stop trying to out-tune a scored penalty and just don't load
+the junk in the first place.
+
+That's the right call, for a structural reason the penalty approach couldn't
+fix: a *scored* penalty subtracts a fixed number of nats, but the raw CTC gap
+between `wl` and `well` is unbounded above — it's whatever a given glide's
+geometry happens to produce (this session alone saw it range -3 to +10 nats,
+and there's no promise that's the ceiling). Any fixed penalty is a bet that
+the gap never exceeds it; each time it did, the fix was "measure a bigger
+number." A **hard exclusion from the trie** has no such bet to make — a word
+that was never inserted cannot win a comparison regardless of how large the
+gap is, because it is never a candidate at all.
+
+Converted `unknown_word_penalty_` (scored, tuned 4.0 -> 12.0, both
+insufficient) into a load-time filter in `load_dict()`: a dictionary entry
+with no `word_freq.txt` row AND no vowel is skipped — never inserted into the
+trie — instead of inserted-then-penalized. Same has_freq/has_vowel gate as
+before (the reasoning for why both signals are required, not just one, is
+unchanged — see the `works`-vs-`world` regression above), just enforced as
+exclusion instead of a score. This costs nothing for tap-typing: the
+dictionary trie only feeds glide decoding, so an excluded word is still
+typeable a key at a time. Re-ran the full corpus (150 glides): 372,005 dict
+words loaded (was 374,819 — 2,814 entries removed, ~0.75% of the lexicon).
+Diffed the miss set against the unmodified baseline: **identical
+contamination-only set** (nw/rr/wk/wl/yr, all glides whose own recorded
+"target" is itself the bug), zero new regressions on any real word. Every
+`target=wl`-labeled glide (the mislabeled test contamination) now correctly
+fails, because `wl` literally cannot be produced anymore — which is the
+correct outcome, not a new problem; those "misses" were never real intended
+targets in the first place. Every genuine `target=well` case now resolves
+correctly except the same two pre-existing, unrelated failures (one badly
+malformed glide the model never scores near `well` regardless of lexicon; one
+loss to `weel`, a real word with its own frequency data, out of scope for
+this fix).
+
+**Shipped: hard exclusion, no tunable left to mistune.** `set_unknown_word_penalty`/
+`unknown_word_penalty_` removed entirely rather than left as dead code.
+
 ## How to run on another session
 ```
 cd tools/text-output-probe && make

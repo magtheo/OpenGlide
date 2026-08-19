@@ -40,3 +40,6 @@ add_executable(aspect_model_test aspect_model_test.cpp)
 
 # Double-letter arithmetic unit test — header-only, no ExecuTorch.
 add_executable(doubling_test doubling_test.cpp)
+
+# Context-rescore unit test (ADR-0006 layer 2) — header-only, no ExecuTorch.
+add_executable(context_rescore_test context_rescore_test.cpp)

@@ -136,6 +136,20 @@ private:
     float keys_[64 * 2];
     bool mask_[64];
 
+    // Loads dict_path into the trie, but not verbatim: a word with no row in
+    // freq_ (word_freq.txt) AND no vowel is skipped entirely — never inserted,
+    // never a candidate, regardless of how well a glide's geometry might fit
+    // it. This is a strict lexicon filter, not a scoring lever (RESULTS.md
+    // "strict lexicon filter", 2026-08-19) — a scored penalty on the same
+    // class was tried first and needed continual re-tuning upward as real
+    // glides kept producing bigger CTC gaps than whatever value had just been
+    // measured; exclusion has no such ceiling to guess at. Real English words
+    // are essentially never vowel-free, so this only removes system-
+    // dictionary junk (e.g. "wl", one of ~1000 consonant-cluster entries in
+    // /usr/share/dict/words) and never a real word the frequency list simply
+    // hasn't seen (freq_-absent but vowel-having words like "works" are kept
+    // — see the has_freq/has_vowel history in this method's git blame for
+    // why both signals, not just one, are required to exclude).
     void load_dict(const std::string& path);
     void load_freq(const std::string& path);    // word<TAB>count -> freq_
     void load_user_freq(const std::string& path);   // word<TAB>count -> user_freq_

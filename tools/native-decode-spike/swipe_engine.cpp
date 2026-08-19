@@ -140,12 +140,31 @@ void SwipeEngine::load_dict(const std::string& path) {
         bool ok = true;
         for (char c : w) if (c < 'a' || c > 'z') { ok = false; break; }
         if (!ok) continue;
+        auto it = freq_.find(w);
+        const bool has_freq = it != freq_.end();
+        // Strict lexicon (RESULTS.md "unknown-word penalty" / "strict lexicon
+        // filter"): a scored PENALTY on this same class (no frequency data, no
+        // vowel) was tried first and needed constant re-tuning upward as real
+        // glides kept producing bigger CTC gaps than whatever value had just
+        // been measured (4.0 -> 12.0 within a day, still not fully fixed) —
+        // there is no ceiling to pick that's guaranteed big enough. Excluding
+        // the word from the trie entirely has no such ceiling: it cannot win
+        // regardless of how favorable its geometry looks, because it is never
+        // a candidate. Real English words are essentially never vowel-free
+        // (a small number of loanwords like cwm are the only exceptions), so
+        // this only ever removes system-dictionary junk (wl, wk, and ~1000
+        // other consonant-cluster "words" in /usr/share/dict/words — RESULTS.md
+        // has the accounting) — never a real word the frequency list simply
+        // hasn't seen (that's exactly what has_freq protects: "works" has no
+        // frequency row either, but it has a vowel, so it stays). This also
+        // costs nothing for tap-typing: the dictionary trie only feeds GLIDE
+        // decoding, so an excluded word is still typeable a key at a time.
+        if (!has_freq && w.find_first_of("aeiou") == std::string::npos) continue;
         // trie path (prefix-shared CTC decode)
         TrieNode* tn = root_.get();
         for (char c : w) tn = trie_child(tn, (int8_t)(c - 'a'));
         tn->is_word = true;
-        auto it = freq_.find(w);
-        tn->logfreq = (it != freq_.end()) ? it->second : 0.0;   // unknown dict words -> no prior (rare)
+        tn->logfreq = has_freq ? it->second : 0.0;   // unknown dict words -> no prior (rare)
         n_words_++;
     }
 }

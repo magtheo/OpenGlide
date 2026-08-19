@@ -247,7 +247,7 @@ Window {
         if (drop)   return {text: "busy — glide again",           problem: true};
         if (pend)   return {text: "decoding…",                    problem: false};
         if (short)  return {text: "too short — glide further",    problem: true};
-        if (ambig)  return {text: "close match — click a word",   problem: true};
+        if (ambig)  return {text: "which one?",                   problem: true};
         if (stall)  return {text: "decode stalled — glide again", problem: true};
         return {text: "", problem: false};
     }
@@ -288,7 +288,14 @@ Window {
         // decoding something.
         if (!decoder.ready) return "notready";
         timedOut = false; dropped = false;
-        if (!decoder.decode(points)) {
+        // Last committed word(s), newest last — flushAmbiguous() above already
+        // settled any pending choice, so `history` reflects true prior context
+        // at glide start. Logging-only (ADR-0006 layer 2 needs real sequence
+        // data; today's corpus has none); does not affect this decode.
+        var ctx = [];
+        for (var ci = Math.max(0, history.length - 2); ci < history.length; ci++)
+            ctx.push(history[ci].text);
+        if (!decoder.decode(points, ctx)) {
             pending = false; dropped = true;
             noteTimer.restart();
             return "dropped";
@@ -340,6 +347,24 @@ Window {
         if (!ambiguous) return;
         ambiguous = false;
         if (candidates.length > 0) commitDecoded(candidates[0].text);
+    }
+    // Reaching for backspace while a choice is pending means neither offered
+    // word was right (user report, 2026-08-19: "still" offered as
+    // stool/sol, neither correct) — flushAmbiguous()'s default-to-top-1
+    // would commit the wrong word just so the very next action could delete
+    // it again. Backspace is an "undo/reject" gesture everywhere else in
+    // this UI (E4's whole premise is asking rather than guessing), so it
+    // drops the question with NOTHING committed instead of passing through:
+    // no injected text to remove, no corpus label for a glide whose true
+    // word is unknown (dropRecord, same as a chip-deleted word). Returns
+    // true when it consumed the backspace this way, so callers stop there
+    // rather than also deleting whatever came before the pending glide.
+    function rejectAmbiguous() {
+        if (!ambiguous) return false;
+        ambiguous = false;
+        if (lastGid) decoder.dropRecord(lastGid, true);
+        candidates = [];
+        return true;
     }
 
     function stateText() {
@@ -537,6 +562,7 @@ Window {
         trimHistory();          // the collapsed space moved everything after it
     }
     function deleteChar() {
+        if (rejectAmbiguous()) return;  // neither offered word was right
         flushAmbiguous();               // backspace = moving on too
         if (!injected.length) return;
         clearUndo();
@@ -546,6 +572,7 @@ Window {
         trimHistory();
     }
     function deleteWord() {                      // backspace-swipe: trailing spaces + one word
+        if (rejectAmbiguous()) return "";         // neither offered word was right
         if (!injected.length) return "";
         flushAmbiguous();
         clearUndo();          // tapDeleteWord re-stages after this returns
@@ -569,7 +596,10 @@ Window {
     // the deletion (with its history entry, so the alternatives come back too)
     // and offer it as a chip until it times out.
     function tapDeleteWord() {
-        flushAmbiguous();
+        // deleteWord() below handles the ambiguous case itself (reject, not
+        // flush) — flushing here first would commit top-1 before it gets
+        // the chance, reintroducing the exact commit-then-delete friction
+        // this is meant to remove.
         const hBefore = history;
         const s = deleteWord();
         if (!s.length) return;
@@ -819,16 +849,29 @@ Window {
                 // are always empty while a note shows). While a choice is
                 // pending the chips ARE the question, so only the contenders
                 // show (chromeSlots room=2) and the pill takes the freed right
-                // half — "close match — click a word" sits beside its answers.
+                // half — "which one?" sits beside its answers.
+                //
+                // A 1px border on transparent, sitting on the light candBar
+                // fill, read as "barely visible" (user report, 2026-08-19,
+                // screenshot of the wl/well ambiguous state) — a plain
+                // outline at this size loses to the two solid-white chips
+                // next to it. Filled with a light tint of the same colour so
+                // it holds its own without going as loud as a solid fill.
                 x: win.ambiguous ? win.u * 3.62 : win.u * 0.36
                 y: parent.height * 0.14
                 width: win.u * 3.20; height: parent.height * 0.72
                 radius: height / 2
-                color: "transparent"
+                color: win.noteIsProblem ? Qt.rgba(0.659, 0.314, 0.039, 0.12)
+                                          : Qt.rgba(0.102, 0.451, 0.910, 0.10)
                 border.color: win.noteIsProblem ? pal.notice : pal.accent
                 border.width: 1
+                // While a choice is pending the two chips ARE the icon — a
+                // third bordered shape (dot or "!") next to two answer chips
+                // was exactly the clutter being reported, so it drops out
+                // here and the text gets the room instead.
                 Item {
                     id: noteIcon
+                    visible: !win.ambiguous
                     x: win.u * 0.22; width: win.u * 0.20; height: width
                     anchors.verticalCenter: parent.verticalCenter
                     Rectangle {          // waiting — pulses
@@ -856,10 +899,12 @@ Window {
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    x: win.u * 0.54
+                    x: win.ambiguous ? win.u * 0.26 : win.u * 0.54
                     width: parent.width - x - win.u * 0.18
+                    horizontalAlignment: win.ambiguous ? Text.AlignHCenter : Text.AlignLeft
                     elide: Text.ElideRight
                     text: win.stateNote
+                    font.bold: win.ambiguous
                     color: win.noteIsProblem ? pal.notice : pal.accent
                     font.pixelSize: Math.max(8, win.u * 0.23)
                 }

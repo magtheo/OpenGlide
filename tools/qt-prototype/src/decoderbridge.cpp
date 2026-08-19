@@ -36,6 +36,17 @@ static QString resolveModel() {
     return {};
 }
 
+// Find the bigram table (ADR-0006 layer 2) next to the spike dir.
+static QString resolveBigrams() {
+    const QStringList candidates = {
+        QCoreApplication::applicationDirPath() + "/../../native-decode-spike/count_2w.txt",
+        QCoreApplication::applicationDirPath() + "/../native-decode-spike/count_2w.txt",
+        "/home/theo/Documents/coding/repos/OpenGlide/tools/native-decode-spike/count_2w.txt",
+    };
+    for (const QString &p : candidates) if (QFileInfo::exists(p)) return p;
+    return {};
+}
+
 // Find the word-frequency list (good>god prior) next to the spike dir.
 static QString resolveFreq() {
     const QStringList candidates = {
@@ -143,6 +154,15 @@ DecoderBridge::DecoderBridge(QObject *parent) : QObject(parent) {
                                           resolveUserFreq().toStdString());
     m_ready = m_eng->ready();
 
+    // ADR-0006 layer 2: bigram table for context rescoring (see decoderbridge.h
+    // for the known register-mismatch risk). Missing file -> empty table ->
+    // rescore() is a guaranteed no-op, same convention as resolveFreq().
+    const QString bp = resolveBigrams();
+    m_bigrams = load_bigrams(bp.toStdString());
+    std::fprintf(stderr, "[context] bigrams: %s (%s)\n",
+                 bp.isEmpty() ? "not found" : qPrintable(bp),
+                 m_bigrams.empty() ? "0 pairs, rescoring is a no-op" : "loaded");
+
     // Key geometry: one file, both consumers (spec §7.2). If it can't be loaded
     // the engine keeps its built-in QWERTY, and we hand QML that same geometry
     // read back from the engine — so the two can never disagree.
@@ -187,7 +207,8 @@ void DecoderBridge::appendLine(const QByteArray &line) {
 
 void DecoderBridge::recordGlide(qint64 gid, const std::string &greedy,
                                 const std::vector<Candidate> &cands,
-                                const std::vector<SwipePoint> &pts, double ms) {
+                                const std::vector<SwipePoint> &pts, double ms,
+                                const QStringList &context, bool ctxOverridden) {
     if (!m_record) return;
     // data-formats.md corpus schema, plus glide_id and greedy. `target` is the
     // best guess at decode time (top-1); amendRecord lines carry the user's
@@ -214,6 +235,10 @@ void DecoderBridge::recordGlide(qint64 gid, const std::string &greedy,
     root["candidates"] = ca;
     root["selected"] = top1;
     root["decode_ms"] = ms;
+    QJsonArray xa;
+    for (const QString &w : context) xa.append(w);
+    root["context"] = xa;               // last committed word(s), newest last
+    root["context_overridden"] = ctxOverridden;   // ADR-0006 layer 2 changed top-1
     appendLine(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
 
@@ -224,13 +249,14 @@ void DecoderBridge::amendRecord(qint64 gid, const QString &word) {
     }).toJson(QJsonDocument::Compact));
 }
 
-void DecoderBridge::dropRecord(qint64 gid) {
+void DecoderBridge::dropRecord(qint64 gid, bool ambiguousReject) {
     if (!m_record || gid <= 0) return;
-    appendLine(QJsonDocument(QJsonObject{{"drop_of", (double)gid}}
-    ).toJson(QJsonDocument::Compact));
+    QJsonObject o{{"drop_of", (double)gid}};
+    if (ambiguousReject) o["ambiguous_reject"] = true;
+    appendLine(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
 
-bool DecoderBridge::decode(const QVariantList &points) {
+bool DecoderBridge::decode(const QVariantList &points, const QStringList &context) {
     if (!m_ready || !m_eng) return false;
     // Stale-discard (ADR-0003): drop a new glide if a decode is still running.
     // Report the drop rather than swallowing it — the caller has no other way
@@ -249,7 +275,7 @@ bool DecoderBridge::decode(const QVariantList &points) {
     // Capture a shared_ptr to the engine so a worker outlives any destructor.
     std::shared_ptr<SwipeEngine> eng = m_eng;
     const qint64 gid = QDateTime::currentMSecsSinceEpoch();
-    std::thread([this, eng, pts = std::move(pts), gid]() {
+    std::thread([this, eng, pts = std::move(pts), gid, context]() {
         std::string greedy;
         const auto t0 = std::chrono::steady_clock::now();
         std::vector<Candidate> cands = eng->decode(pts, &greedy);
@@ -258,7 +284,28 @@ bool DecoderBridge::decode(const QVariantList &points) {
         std::fprintf(stderr, "[decode] greedy=\"%s\" %.0fms:", greedy.c_str(), ms);
         for (const Candidate &c : cands) std::fprintf(stderr, " %s(%.2f)", c.text.c_str(), c.score);
         std::fputc('\n', stderr);
-        recordGlide(gid, greedy, cands, pts, ms);
+
+        // ADR-0006 layer 2: re-rank using the previous committed word. A
+        // re-ranker over the decoder's own output (ADR consequence), not a
+        // replacement — it only ever reorders `cands`, never adds a word CTC
+        // didn't already propose. Empty context or <2 candidates is a no-op
+        // (context_rescore.h). KNOWN RISK: see decoderbridge.h m_bigrams.
+        bool ctxOverridden = false;
+        if (!context.isEmpty() && cands.size() >= 2) {
+            std::vector<RescoreCandidate> rc;
+            rc.reserve(cands.size());
+            for (const Candidate &c : cands) rc.push_back({c.text, (double)c.score});
+            const std::string prev = context.last().toStdString();
+            RescoreResult rr = rescore(prev, rc, m_bigrams, m_ctxLambda);
+            if (rr.overridden) {
+                std::fprintf(stderr, "[context] prev=\"%s\" override: %s -> %s (margin %.2f)\n",
+                             prev.c_str(), cands[0].text.c_str(),
+                             cands[rr.winner_idx].text.c_str(), rr.margin);
+                std::swap(cands[0], cands[rr.winner_idx]);
+                ctxOverridden = true;
+            }
+        }
+        recordGlide(gid, greedy, cands, pts, ms, context, ctxOverridden);
         QVariantList ql;
         for (const Candidate &c : cands) {
             QVariantMap vm;

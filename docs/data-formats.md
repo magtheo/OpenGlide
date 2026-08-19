@@ -92,12 +92,35 @@ user content; the app announces the file loudly at startup). Three line types:
 ```json
 {"glide_id": 1787035301348, "schema_version": 1, "target": "test",
  "greedy": "test", "layout_id": "en_qwerty_v1", "points": [...],
- "candidates": [...], "selected": "test", "decode_ms": 41.9}
+ "candidates": [...], "selected": "test", "decode_ms": 41.9,
+ "context": ["need", "to"]}
 {"amend_of": 1787035301348, "selected": "test"}
 {"drop_of": 1787035301348}
+{"drop_of": 1787035301348, "ambiguous_reject": true}
 ```
 
 - `glide_id` is epoch-ms at decode start (unique: decodes are serialized).
+- `context` is the last 0-2 committed words (QML `history`, newest last) at
+  glide start. Added for ADR-0006 layer 2 (n-gram context rescoring): every
+  corpus before this had no sequence data, only isolated words, so a
+  rescorer had nothing real to be tested against. Older lines lack this
+  field; treat missing as `[]`.
+- `context_overridden` (bool) is true when the layer-2 rescorer changed which
+  candidate is top-1/`target`/`selected` for THIS glide, based on `context`.
+  It is live (RESULTS.md "context rescoring — real signal, and a real risk"):
+  known to fix some real cases and known to misfire on casual spellings the
+  bigram source (formal, edited text) has never seen. Older lines lack this
+  field; treat missing as `false`.
+- `ambiguous_reject` (bool, only present on `drop_of` lines) is true when the
+  glide was in the E4 ambiguous state (RESULTS.md "which one?" friction fix,
+  2026-08-19) and backspace rejected it — neither offered candidate was the
+  intended word, and nothing was ever committed. A plain `drop_of` (field
+  absent/false) means top-1 committed and was chip-deleted afterward — a
+  different failure (top-1 wrong but not offered as a choice) from this one
+  (both offered choices wrong). Distinguishing the two is what lets a future
+  margin/candidate-quality sweep measure "how often are the ambiguous chips
+  themselves both wrong" the same way the original margin sweep measured
+  ambigMargin.
 - A glide line's `target`/`selected` are the **top-1 guess, not a label** — the
   guess is the thing being measured. Trustworthy labels come from the app's
   edit paths: a chip **correction** appends an `amend_of` line naming the true
