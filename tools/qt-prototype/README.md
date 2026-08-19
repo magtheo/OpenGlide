@@ -110,11 +110,19 @@ stderr, check `journalctl --user`.
   so the letter block spans the full width (no letterbox) and the action row
   shares its columns and outer edges. Shift + ⌫ fill the 1.5u wings at each end
   of row 3 that used to be empty. Glide surface went from **26.8% → 60%** of the
-  window; the default is 560×280, not 900×360. Resize by `−`/`+` stepper, S/M/L
+  window; the compact default is 440×220, not 900×360. Resize by `−`/`+` stepper, S/M/L
   presets, corner grabs, or the top/bottom edges; geometry persists. `×`
   **collapses to a draggable puck** rather than quitting — quit is in the ⋯ menu,
   because in a mouse-only session a one-click quit is unrecoverable. Status line
   and committed mirror are behind the ⋯ → Diagnostics toggle (ADR-0004).
+- **Appearance follows the desktop** by default, with persistent System / Light /
+  Dark selection independent from the keyboard colorway. Appearance offers
+  Neutral, Ocean, Forest, Plum, Rose and Amber presets plus a mouse-first custom
+  RGB picker with live preview and a `#RRGGBB` readout. A color is a seed rather
+  than a raw background: it lightly tints the body, chrome and keys, then becomes
+  stronger for hover, gliding and selection; warning and destructive colors keep
+  their semantic meaning. The normalized decoder geometry and all hit targets
+  are unchanged.
 - **Key geometry is loaded, not hard-coded** (spec §7.2): `languages/en/layout.json`
   → `SwipeEngine::set_layout()` → read back → `decoder.keys` → QML. One file, both
   consumers. A malformed layout is rejected whole and the built-in QWERTY stands.

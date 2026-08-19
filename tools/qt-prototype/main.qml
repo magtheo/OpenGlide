@@ -17,38 +17,110 @@ import OpenGlide 1.0
 // inputs: the SwipeSurface still normalizes against the letter block alone.
 Window {
     id: win
-    width: 560; height: 280
+    width: 440; height: 220
     // Shown from main.cpp AFTER the layer-shell surface is configured: the
     // surface type (layer vs xdg-toplevel) is fixed at first commit, and QML
     // visible:true would commit a plain toplevel before WindowCtl::attach ran
     // ("Cannot set shell integration while there's already a shell surface").
     visible: false
     flags: Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus | Qt.FramelessWindowHint
-    color: hidden ? "transparent" : pal.shell
+    color: "transparent"
     minimumWidth:  collapsed ? 1 : 320
     minimumHeight: collapsed ? 1 : 170
 
-    // ---- FUTO-inspired palette ----
+    // ---- quiet, semantic palette ------------------------------------------------
+    // Follow the desktop unless the user explicitly chooses Light or Dark. Every
+    // visible colour lives here so both modes stay coherent; components describe
+    // their role rather than carrying light-only literals of their own.
+    property string themeMode: "system"       // "system" | "light" | "dark"
+    readonly property bool darkTheme: themeMode === "dark"
+                                           || (themeMode === "system"
+                                               && Qt.styleHints.colorScheme === Qt.ColorScheme.Dark)
+    property string colorway: "neutral"
+    property int customRed: 94
+    property int customGreen: 129
+    property int customBlue: 172
+    property bool appearanceOpen: false
+    property bool customColorOpen: false
+    readonly property string uiFont: "Inter"
+    function colorFromHex(value) {
+        const s = String(value);
+        if (/^#[0-9a-fA-F]{6}$/.test(s))
+            return Qt.rgba(parseInt(s.substring(1, 3), 16) / 255,
+                           parseInt(s.substring(3, 5), 16) / 255,
+                           parseInt(s.substring(5, 7), 16) / 255, 1);
+        return value;
+    }
+    function mixColor(a, b, amount) {
+        const ca = colorFromHex(a), cb = colorFromHex(b);
+        return Qt.rgba(ca.r + (cb.r - ca.r) * amount,
+                       ca.g + (cb.g - ca.g) * amount,
+                       ca.b + (cb.b - ca.b) * amount, 1);
+    }
+    function colorwaySeed(name) {
+        if (name === "ocean")  return colorFromHex("#3f7fc4");
+        if (name === "forest") return colorFromHex("#438567");
+        if (name === "plum")   return colorFromHex("#815fa8");
+        if (name === "rose")   return colorFromHex("#ad5f76");
+        if (name === "amber")  return colorFromHex("#a8732f");
+        if (name === "custom") return Qt.rgba(customRed / 255, customGreen / 255,
+                                                customBlue / 255, 1);
+        return colorFromHex(darkTheme ? "#7c8794" : "#68737f");
+    }
+    readonly property color seedColor: colorwaySeed(colorway)
+    function accentTextFor(c) {
+        // Relative perceived brightness is sufficient here because accent is
+        // already pulled away from the mode's extreme before this is called.
+        return c.r * 0.299 + c.g * 0.587 + c.b * 0.114 > 0.58 ? "#15181c" : "#ffffff";
+    }
+    function twoDigitHex(n) {
+        const s = Math.max(0, Math.min(255, Math.round(n))).toString(16).toUpperCase();
+        return s.length < 2 ? "0" + s : s;
+    }
+    readonly property string customHex: "#" + twoDigitHex(customRed)
+                                               + twoDigitHex(customGreen)
+                                               + twoDigitHex(customBlue)
     readonly property QtObject pal: QtObject {
-        readonly property color shell: "#c8ccd1"       // frame / resize ring
-        readonly property color bg: "#e8eaed"          // keyboard background
-        readonly property color key: "#ffffff"         // letter keys
-        readonly property color keyPop: "#d3e3fd"      // key under the cursor
-        readonly property color keyText: "#202124"
-        readonly property color action: "#bdc1c6"      // space / punct / backspace
-        readonly property color actionHold: "#9aa0a6"  // backspace while held
-        readonly property color actionText: "#3c4043"
-        readonly property color accent: "#1a73e8"
-        readonly property color accentText: "#ffffff"
-        readonly property color notice: "#a8500a"      // retryable problem states
-        readonly property color candBar: "#f1f3f4"
-        readonly property color muted: "#5f6368"
-        readonly property color committedBg: "#202124"
-        readonly property color committedText: "#e8eaed"
+        readonly property color body: win.mixColor(win.darkTheme ? "#17191d" : "#d9dce1",
+                                                    win.seedColor, win.colorway === "neutral" ? 0.02 : 0.10)
+        readonly property color bodyOutline:       win.darkTheme ? "#676e78" : "#727983"
+        readonly property color keyboardBackground: win.mixColor(win.darkTheme ? "#202329" : "#eceef1",
+                                                                  win.seedColor, win.colorway === "neutral" ? 0.015 : 0.08)
+        readonly property color keyBackground: win.mixColor(win.darkTheme ? "#292d34" : "#f8f8f7",
+                                                             win.seedColor, win.colorway === "neutral" ? 0.01 : 0.055)
+        readonly property color keyHover: win.mixColor(keyBackground, accent, win.darkTheme ? 0.28 : 0.18)
+        readonly property color keyOutline:        win.darkTheme ? "#555d68" : "#aeb4bc"
+        readonly property color keyText:           win.darkTheme ? "#f0f2f5" : "#26292d"
+        readonly property color actionBackground: win.mixColor(win.darkTheme ? "#24282e" : "#dde0e4",
+                                                                win.seedColor, win.colorway === "neutral" ? 0.015 : 0.07)
+        readonly property color actionPressed:     win.darkTheme ? "#3b414a" : "#c3c8cf"
+        readonly property color actionText:        win.darkTheme ? "#d9dde3" : "#3d4248"
+        readonly property color accent: win.colorway === "neutral"
+                                         ? (win.darkTheme ? "#78aef5" : "#2f6fbd")
+                                         : win.mixColor(win.seedColor,
+                                                        win.darkTheme ? "#ffffff" : "#000000",
+                                                        win.darkTheme ? 0.25 : 0.12)
+        readonly property color accentText:        win.accentTextFor(accent)
+        readonly property color notice:            win.darkTheme ? "#e7a45d" : "#99520f"
+        readonly property color chromeBackground: win.mixColor(win.darkTheme ? "#1b1e23" : "#e4e6e9",
+                                                                win.seedColor, win.colorway === "neutral" ? 0.02 : 0.11)
+        readonly property color mutedText:         win.darkTheme ? "#a8afb9" : "#5d646d"
+        readonly property color panelBackground: win.mixColor(win.darkTheme ? "#25292f" : "#ffffff",
+                                                               win.seedColor, win.colorway === "neutral" ? 0.01 : 0.045)
+        readonly property color panelHover: win.mixColor(panelBackground, accent,
+                                                          win.darkTheme ? 0.15 : 0.08)
+        readonly property color destructive:       win.darkTheme ? "#ff938a" : "#b3261e"
+        readonly property color disabledText:      win.darkTheme ? "#747b85" : "#90969e"
+        readonly property color gaugeInactive:     win.darkTheme ? "#69717d" : "#737a83"
+        readonly property color diagnosticsBackground: win.darkTheme ? "#111317" : "#202124"
+        readonly property color diagnosticsText:   win.darkTheme ? "#e4e7eb" : "#e8eaed"
+        readonly property color accentTint: win.mixColor(panelBackground, accent,
+                                                          win.darkTheme ? 0.20 : 0.12)
+        readonly property color noticeTint:        win.darkTheme ? "#3c2d20" : "#f3e5d8"
     }
 
     // ---- geometry: two units, everything else derived (ADR-0005 §1) ----
-    // The frame is the resize ring; it is the only deliberate dead space left.
+    // The frame is the resize hit band and the inset that exposes the body edge.
     readonly property real frame:    Math.max(4, Math.min(8, width * 0.008))
     readonly property real contentW: width  - 2 * frame
     readonly property real contentH: height - 2 * frame
@@ -78,8 +150,8 @@ Window {
 
     // ---- window state ----
     property bool collapsed: false
-    property int  expandedW: 560
-    property int  expandedH: 280
+    property int  expandedW: 440
+    property int  expandedH: 220
     readonly property int puckW: Math.max(96, Math.round(expandedW * 0.22))
     readonly property int puckH: Math.max(30, Math.round(expandedW * 0.075))
     property bool menuOpen: false
@@ -667,6 +739,42 @@ Window {
         if (collapsed) return;
         width = w; height = h; menuOpen = false;
     }
+    function setTheme(mode) {
+        themeMode = mode;
+        settings.setValue("appearance/theme", themeMode);
+        settings.sync();
+    }
+    function setColorway(name) {
+        colorway = name;
+        settings.setValue("appearance/colorway", colorway);
+        settings.sync();
+    }
+    function setCustomChannel(channel, value) {
+        const v = Math.max(0, Math.min(255, Math.round(value)));
+        if (channel === "r") customRed = v;
+        else if (channel === "g") customGreen = v;
+        else customBlue = v;
+        colorway = "custom";
+    }
+    function saveCustomColor() {
+        settings.setValue("appearance/colorway", "custom");
+        settings.setValue("appearance/customColor", customHex);
+        settings.sync();
+    }
+    function toggleMenu() {
+        menuOpen = !menuOpen;
+        if (menuOpen) {
+            appearanceOpen = false;
+            customColorOpen = false;
+        }
+    }
+    function themeLabel() {
+        if (themeMode === "system") return "System (" + (darkTheme ? "dark" : "light") + ")";
+        return themeMode.charAt(0).toUpperCase() + themeMode.substring(1);
+    }
+    function colorwayLabel() {
+        return colorway.charAt(0).toUpperCase() + colorway.substring(1);
+    }
     // Hidden (spec §13.5): the keyboard is gone from view but the Wayland surface
     // stays MAPPED — invisible (opacity 0) and click-through (empty input region).
     // Unmapping (visible=false) would make Mutter re-place it on re-show (see the
@@ -717,8 +825,8 @@ Window {
     onYChanged: saveGeom.restart()
 
     Component.onCompleted: {
-        const w = parseInt(settings.value("window/width", 560));
-        const h = parseInt(settings.value("window/height", 280));
+        const w = parseInt(settings.value("window/width", 440));
+        const h = parseInt(settings.value("window/height", 220));
         if (w > 0 && h > 0) { win.width = Math.max(320, w); win.height = Math.max(170, h); }
         const sx = parseInt(settings.value("window/x", -1));
         const sy = parseInt(settings.value("window/y", -1));
@@ -726,6 +834,17 @@ Window {
         win.expandedW = win.width; win.expandedH = win.height;
         win.avoidCaret = settings.value("window/avoidCaret", true) !== false
                       && String(settings.value("window/avoidCaret", true)) !== "false";
+        const savedTheme = String(settings.value("appearance/theme", "system"));
+        win.themeMode = savedTheme === "light" || savedTheme === "dark" ? savedTheme : "system";
+        const savedColorway = String(settings.value("appearance/colorway", "neutral"));
+        const validColorways = ["neutral", "ocean", "forest", "plum", "rose", "amber", "custom"];
+        win.colorway = validColorways.indexOf(savedColorway) >= 0 ? savedColorway : "neutral";
+        const savedCustom = String(settings.value("appearance/customColor", "#5E81AC"));
+        if (/^#[0-9a-fA-F]{6}$/.test(savedCustom)) {
+            win.customRed = parseInt(savedCustom.substring(1, 3), 16);
+            win.customGreen = parseInt(savedCustom.substring(3, 5), 16);
+            win.customBlue = parseInt(savedCustom.substring(5, 7), 16);
+        }
     }
 
     Timer {
@@ -737,6 +856,19 @@ Window {
         }
     }
 
+    // The visible edge is a quiet outline; `frame` remains the larger invisible
+    // resize target. Keeping those separate removes the old flat gray resize ring
+    // without making the window harder to grab.
+    Rectangle {
+        visible: !win.hidden
+        anchors.fill: parent
+        radius: Math.max(5, win.u * 0.22)
+        color: pal.body
+        border.color: pal.bodyOutline
+        border.width: 1
+        antialiasing: true
+    }
+
     // ======================= COLLAPSED: the puck =======================
     // `×` collapses to this instead of quitting. It is draggable, always on top,
     // needs no permissions, and one click brings the keyboard back — the
@@ -744,19 +876,14 @@ Window {
     Rectangle {
         visible: win.collapsed
         anchors.fill: parent
-        color: pal.committedBg
+        color: pal.diagnosticsBackground
         radius: Math.max(3, height * 0.18)
         Text {
             anchors.centerIn: parent
             text: "⌨  OpenGlide"
-            color: pal.committedText
+            color: pal.diagnosticsText
+            font.family: win.uiFont
             font.pixelSize: Math.max(9, parent.height * 0.36)
-        }
-        Rectangle {   // IME indicator
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.right: parent.right; anchors.rightMargin: parent.height * 0.28
-            width: parent.height * 0.20; height: width; radius: width / 2
-            color: win.ibusActive ? pal.accent : pal.muted
         }
         MouseArea {
             anchors.fill: parent
@@ -795,13 +922,13 @@ Window {
         x: win.frame; y: win.frame
         width: win.contentW; height: win.contentH
 
-        Rectangle { anchors.fill: parent; color: pal.bg }
+        Rectangle { anchors.fill: parent; color: pal.keyboardBackground }
 
         // ---------------- chrome bar: drag + candidates + controls ----------------
         Rectangle {
             id: topbar
             x: 0; y: 0; width: parent.width; height: win.chromeH
-            color: pal.candBar
+            color: pal.chromeBackground
 
             // Any chrome that is not a control is a drag handle. Deltas come
             // from the seat-global cursor (windowCtl), not item-relative mouse
@@ -830,12 +957,6 @@ Window {
                 onReleased: win.persistGeometry()
             }
 
-            Rectangle {   // IME status dot
-                x: win.u * 0.10; width: win.u * 0.18; height: width; radius: width / 2
-                anchors.verticalCenter: parent.verticalCenter
-                color: win.ibusActive ? pal.accent : pal.muted
-            }
-
             // ---- state pill: what the machine is doing, in the user's line of sight ----
             // It takes the two LEFTMOST chip slots, which is the cheapest pair to
             // borrow: candidates are always empty while a note is showing, and the
@@ -861,8 +982,7 @@ Window {
                 y: parent.height * 0.14
                 width: win.u * 3.20; height: parent.height * 0.72
                 radius: height / 2
-                color: win.noteIsProblem ? Qt.rgba(0.659, 0.314, 0.039, 0.12)
-                                          : Qt.rgba(0.102, 0.451, 0.910, 0.10)
+                color: win.noteIsProblem ? pal.noticeTint : pal.accentTint
                 border.color: win.noteIsProblem ? pal.notice : pal.accent
                 border.width: 1
                 // While a choice is pending the two chips ARE the icon — a
@@ -905,6 +1025,7 @@ Window {
                     elide: Text.ElideRight
                     text: win.stateNote
                     font.bold: win.ambiguous
+                    font.family: win.uiFont
                     color: win.noteIsProblem ? pal.notice : pal.accent
                     font.pixelSize: Math.max(8, win.u * 0.23)
                 }
@@ -932,8 +1053,8 @@ Window {
                     // it comes back on its own when the note expires, since both
                     // are bindings and the 8 s undo window outlives the 2.6 s note.
                     visible: slot !== null && !(win.stateNote.length > 0 && index < 2 && !win.ambiguous)
-                    color: isTop ? pal.accent : (isHist || isUndo ? "transparent" : "#ffffff")
-                    border.color: isUndo ? pal.accent : (isHist ? pal.muted : "#dadce0")
+                    color: isTop ? pal.accent : (isHist || isUndo ? "transparent" : pal.panelBackground)
+                    border.color: isUndo ? pal.accent : (isHist ? pal.mutedText : pal.keyOutline)
                     border.width: isTop ? 0 : (isUndo ? 2 : 1)
                     Text {
                         anchors.fill: parent; anchors.margins: parent.height * 0.18
@@ -941,10 +1062,11 @@ Window {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                         elide: Text.ElideRight
                         font.bold: parent.isTop || parent.isUndo
+                        font.family: win.uiFont
                         font.pixelSize: Math.max(8, win.u * 0.26)
                         color: parent.isTop ? pal.accentText
                                : parent.isUndo ? pal.accent
-                               : (parent.isHist ? pal.muted : pal.keyText)
+                               : (parent.isHist ? pal.mutedText : pal.keyText)
                     }
                     MouseArea {
                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -979,10 +1101,11 @@ Window {
                     x: win.u * modelData.slot; y: parent.height * 0.14
                     width: win.u * 0.70; height: parent.height * 0.72
                     radius: Math.max(2, win.u * 0.10)
-                    color: ma.containsMouse ? "#ffffff" : "transparent"
+                    color: ma.containsMouse ? pal.panelHover : "transparent"
                     Text {
                         anchors.centerIn: parent; text: modelData.g
-                        font.pixelSize: Math.max(9, win.u * 0.30); color: pal.muted
+                        font.pixelSize: Math.max(9, win.u * 0.30); color: pal.mutedText
+                        font.family: win.uiFont
                     }
                     MouseArea {
                         id: ma
@@ -992,7 +1115,7 @@ Window {
                             if (modelData.act === "smaller")       win.rescale(1 / 1.12);
                             else if (modelData.act === "bigger")   win.rescale(1.12);
                             else if (modelData.act === "collapse") win.collapse();
-                            else                                   win.menuOpen = !win.menuOpen;
+                            else                                   win.toggleMenu();
                         }
                     }
                 }
@@ -1020,9 +1143,9 @@ Window {
                     width:  win.u - 2 * win.kgap
                     height: win.rowH - 2 * win.kgap
                     radius: win.krad
-                    color: modelData.l === win.activeKey ? pal.keyPop : pal.key
-                    border.color: pal.accent
-                    border.width: parked ? Math.max(1, win.u * 0.05) : 0
+                    color: modelData.l === win.activeKey ? pal.keyHover : pal.keyBackground
+                    border.color: parked ? pal.accent : pal.keyOutline
+                    border.width: parked ? Math.max(2, win.u * 0.045) : 1
                     z: modelData.l === win.activeKey ? 1 : 0
                     transformOrigin: Item.Center
                     Behavior on scale { NumberAnimation { duration: 70; easing.type: Easing.OutCubic } }
@@ -1030,7 +1153,8 @@ Window {
                     Text {
                         anchors.centerIn: parent
                         text: win.shiftState > 0 ? modelData.l : modelData.c
-                        font.bold: true
+                        font.weight: Font.Medium
+                        font.family: win.uiFont
                         font.pixelSize: Math.max(9, Math.min(win.u, win.rowH) * 0.46)
                         color: pal.keyText
                     }
@@ -1046,15 +1170,16 @@ Window {
                     width:  win.u - 2 * win.kgap
                     height: win.rowH - 2 * win.kgap
                     radius: win.krad
-                    color: sym.pressed ? pal.keyPop : pal.key
+                    color: sym.pressed ? pal.keyHover : pal.keyBackground
                     // Same "you are here" ring as the letter layer — this layer
                     // is tap-only, so knowing what you are about to hit matters
                     // just as much and there is no glide trail to tell you.
-                    border.color: pal.accent
-                    border.width: sym.containsMouse ? Math.max(1, win.u * 0.05) : 0
+                    border.color: sym.containsMouse ? pal.accent : pal.keyOutline
+                    border.width: sym.containsMouse ? Math.max(2, win.u * 0.045) : 1
                     Text {
                         anchors.centerIn: parent; text: modelData.l
-                        font.bold: true
+                        font.weight: Font.Medium
+                        font.family: win.uiFont
                         font.pixelSize: Math.max(9, Math.min(win.u, win.rowH) * 0.42)
                         color: pal.keyText
                     }
@@ -1148,13 +1273,14 @@ Window {
                 x: win.kgap; y: 2 * win.rowH + win.kgap
                 width: 1.5 * win.u - 2 * win.kgap; height: win.rowH - 2 * win.kgap
                 radius: win.krad
-                color: win.shiftState === 2 ? pal.accent : (win.shiftState === 1 ? pal.keyPop : pal.action)
-                border.color: pal.accent
-                border.width: sh.containsMouse ? Math.max(1, win.u * 0.05) : 0
+                color: win.shiftState === 2 ? pal.accent : (win.shiftState === 1 ? pal.keyHover : pal.actionBackground)
+                border.color: sh.containsMouse ? pal.accent : pal.keyOutline
+                border.width: sh.containsMouse ? Math.max(2, win.u * 0.045) : 1
                 Text {
                     anchors.centerIn: parent
                     text: win.shiftState === 2 ? "⇪" : "⇧"
                     font.pixelSize: Math.max(10, Math.min(win.u, win.rowH) * 0.50)
+                    font.family: win.uiFont
                     color: win.shiftState === 2 ? pal.accentText : pal.actionText
                 }
                 MouseArea {
@@ -1170,12 +1296,13 @@ Window {
                 x: 8.5 * win.u + win.kgap; y: 2 * win.rowH + win.kgap
                 width: 1.5 * win.u - 2 * win.kgap; height: win.rowH - 2 * win.kgap
                 radius: win.krad
-                color: bs.pressed ? pal.actionHold : pal.action
-                border.color: pal.accent
-                border.width: bs.containsMouse ? Math.max(1, win.u * 0.05) : 0
+                color: bs.pressed ? pal.actionPressed : pal.actionBackground
+                border.color: bs.containsMouse ? pal.accent : pal.keyOutline
+                border.width: bs.containsMouse ? Math.max(2, win.u * 0.045) : 1
                 Text {
                     anchors.centerIn: parent; text: "⌫"
                     font.pixelSize: Math.max(10, Math.min(win.u, win.rowH) * 0.50); color: pal.actionText
+                    font.family: win.uiFont
                 }
                 // tap = word · hold = one char immediately, then repeat
                 //   · hold+swipe-left = multi-word delete · swipe-right = undo
@@ -1248,13 +1375,14 @@ Window {
                     width: (modelData.to - modelData.from) * win.u - 2 * win.kgap
                     height: parent.height - 2 * win.kgap
                     radius: win.krad
-                    color: modelData.act === "layer" && win.layer === "sym" ? pal.accent : pal.action
-                    border.color: pal.accent
-                    border.width: am.containsMouse ? Math.max(1, win.u * 0.05) : 0
+                    color: modelData.act === "layer" && win.layer === "sym" ? pal.accent : pal.actionBackground
+                    border.color: am.containsMouse ? pal.accent : pal.keyOutline
+                    border.width: am.containsMouse ? Math.max(2, win.u * 0.045) : 1
                     Text {
                         anchors.centerIn: parent
                         text: modelData.act === "layer" && win.layer === "sym" ? "ABC" : modelData.g
                         font.pixelSize: Math.max(8, win.actionH * (modelData.act === "space" || modelData.act === "layer" ? 0.34 : 0.48))
+                        font.family: win.uiFont
                         color: modelData.act === "layer" && win.layer === "sym" ? pal.accentText : pal.actionText
                     }
                     MouseArea {
@@ -1281,7 +1409,7 @@ Window {
             x: parent.width - width - win.u * 0.3
             width: Math.min(parent.width - win.u, win.u * 0.6 + win.availWords * win.u * 0.34)
             height: win.rowH * 0.8; radius: win.krad
-            color: pal.committedBg; border.color: pal.accent; border.width: 2; z: 5
+            color: pal.diagnosticsBackground; border.color: pal.accent; border.width: 2; z: 5
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left; anchors.leftMargin: win.u * 0.2
@@ -1296,7 +1424,7 @@ Window {
                     model: win.availWords
                     Rectangle {
                         width: win.u * 0.22; height: width; radius: width / 2
-                        color: index < bs.wordsDeleted ? pal.accent : "#6b7178"
+                        color: index < bs.wordsDeleted ? pal.accent : pal.gaugeInactive
                     }
                 }
             }
@@ -1308,7 +1436,7 @@ Window {
             x: 0; width: parent.width
             height: win.chromeH * 0.8
             y: parent.height - height
-            color: pal.committedBg; opacity: 0.94; z: 40
+            color: pal.diagnosticsBackground; opacity: 0.94; z: 40
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left; anchors.leftMargin: win.u * 0.15
@@ -1316,6 +1444,7 @@ Window {
                 elide: Text.ElideRight
                 text: win.stateText() + "   ·   aspect " + win.letterAspect.toFixed(2)
                       + "   ·   " + decoder.layoutId
+                      + "   ·   IBus: " + (win.ibusActive ? "active" : "inactive")
                       + "   ·   toggle: " + toggleListener.status
                       + "   ·   preedit: " + (win.clientCaps < 0 ? "no caps reported"
                             : (win.preeditSupported ? "YES" : "no") + " (caps 0x" + win.clientCaps.toString(16) + ")")
@@ -1326,7 +1455,7 @@ Window {
                             : "never reported")
                       + "   ·   ⌨ " + (win.injected.length ? win.injected.replace(/\s+$/, "") : "—")
                       + "   ·   ptr L" + pointerSpeed.level
-                color: pal.committedText
+                color: pal.diagnosticsText
                 font.pixelSize: Math.max(7, win.u * 0.20); font.family: "monospace"
             }
         }
@@ -1351,8 +1480,8 @@ Window {
             x: Math.max(win.u * 0.1, Math.min(parent.width - width - win.u * 0.1, win.histOpenX))
             y: win.chromeH
             width: win.u * 2.6; height: histCol.height + win.u * 0.2
-            color: "#ffffff"; radius: Math.max(3, win.u * 0.12)
-            border.color: "#dadce0"; border.width: 1
+            color: pal.panelBackground; radius: Math.max(3, win.u * 0.12)
+            border.color: pal.keyOutline; border.width: 1
             Column {
                 id: histCol
                 x: 0; y: win.u * 0.1; width: parent.width
@@ -1365,14 +1494,15 @@ Window {
                     Rectangle {
                         readonly property bool isDelete: index === histPopup.alts.length
                         width: parent.width; height: win.u * 0.58
-                        color: hm.containsMouse ? pal.candBar : "#ffffff"
+                        color: hm.containsMouse ? pal.panelHover : pal.panelBackground
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
                             x: win.u * 0.18; width: parent.width - x * 2
                             elide: Text.ElideRight
                             text: parent.isDelete ? "Delete" : histPopup.alts[index]
                             font.pixelSize: Math.max(8, win.u * 0.22)
-                            color: parent.isDelete ? "#c5221f" : pal.keyText
+                            color: parent.isDelete ? pal.destructive : pal.keyText
+                            font.family: win.uiFont
                         }
                         MouseArea {
                             id: hm
@@ -1399,27 +1529,42 @@ Window {
             onClicked: win.menuOpen = false
         }
         Rectangle {
-            visible: win.menuOpen; z: 61
+            id: menuPanel
+            visible: win.menuOpen && !win.appearanceOpen; z: 61
             x: Math.min(parent.width - width - win.u * 0.1, win.u * 6.2)
             y: win.chromeH
-            width: win.u * 4.6; height: menuCol.height + win.u * 0.2
-            color: "#ffffff"; radius: Math.max(3, win.u * 0.12)
-            border.color: "#dadce0"; border.width: 1
-            Column {
-                id: menuCol
-                x: 0; y: win.u * 0.1; width: parent.width
-                Repeater {
-                    model: [
-                        {g: "Small  · 440×220",  act: "s"},
-                        {g: "Medium · 560×280",  act: "m"},
-                        {g: "Large  · 720×360",  act: "l"},
-                        {g: "Hide completely",   act: "hide"},
-                        {g: "Avoid the caret",   act: "caret"},
-                        {g: "Pointer slow",      act: "ptr"},
-                        {g: "Diagnostics",       act: "diag"},
-                        {g: "Quit OpenGlide",    act: "quit"}
-                    ]
-                    Rectangle {
+            width: win.u * 4.6
+            height: Math.min(menuCol.height + win.u * 0.2,
+                             content.height - y - win.u * 0.1)
+            color: pal.panelBackground; radius: Math.max(3, win.u * 0.12)
+            border.color: pal.keyOutline; border.width: 1
+            clip: true
+            onVisibleChanged: if (visible) menuFlick.contentY = 0
+
+            Flickable {
+                id: menuFlick
+                anchors.fill: parent
+                contentWidth: width
+                contentHeight: menuCol.height + win.u * 0.2
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentHeight > height
+
+                Column {
+                    id: menuCol
+                    x: 0; y: win.u * 0.1; width: menuFlick.width
+                    Repeater {
+                        model: [
+                            {g: "Small  · 440×220",  act: "s"},
+                            {g: "Medium · 560×280",  act: "m"},
+                            {g: "Large  · 720×360",  act: "l"},
+                            {g: "Appearance",         act: "appearance"},
+                            {g: "Hide completely",   act: "hide"},
+                            {g: "Avoid the caret",   act: "caret"},
+                            {g: "Pointer slow",      act: "ptr"},
+                            {g: "Diagnostics",       act: "diag"},
+                            {g: "Quit OpenGlide",    act: "quit"}
+                        ]
+                        Rectangle {
                         readonly property bool disabled:
                             (modelData.act === "hide" && !toggleListener.available)
                             || (modelData.act === "ptr" && !pointerSpeed.available)
@@ -1437,7 +1582,7 @@ Window {
                             : ""
                         width: parent.width
                         height: hint.length ? win.u * 0.92 : win.u * 0.62
-                        color: mi.containsMouse && !disabled ? pal.candBar : "#ffffff"
+                        color: mi.containsMouse && !disabled ? pal.panelHover : pal.panelBackground
                         Column {
                             anchors.verticalCenter: parent.verticalCenter
                             x: win.u * 0.22
@@ -1446,7 +1591,9 @@ Window {
                             Text {
                                 width: parent.width
                                 elide: Text.ElideRight
-                                text: modelData.act === "caret" ? (win.avoidCaret ? "✓ " : "") + modelData.g
+                                text: modelData.act === "appearance"
+                                            ? "Appearance · " + win.themeLabel() + " / " + win.colorwayLabel()
+                                      : modelData.act === "caret" ? (win.avoidCaret ? "✓ " : "") + modelData.g
                                       : modelData.act === "diag" && win.showDiagnostics ? "✓ " + modelData.g
                                       : modelData.act === "hide" && toggleListener.available
                                             ? "Hide · " + win.toggleGesture() + " to return"
@@ -1454,8 +1601,9 @@ Window {
                                             ? "Pointer slow: " + (pointerSpeed.level === 0 ? "off" : "L" + pointerSpeed.level)
                                       : modelData.g
                                 font.pixelSize: Math.max(8, win.u * 0.21)
-                                color: parent.parent.disabled ? "#9aa0a6"
-                                       : modelData.act === "quit" ? "#c5221f" : pal.keyText
+                                font.family: win.uiFont
+                                color: parent.parent.disabled ? pal.disabledText
+                                       : modelData.act === "quit" ? pal.destructive : pal.keyText
                             }
                             Text {
                                 visible: parent.parent.hint.length > 0
@@ -1463,7 +1611,8 @@ Window {
                                 elide: Text.ElideRight
                                 text: parent.parent.hint
                                 font.pixelSize: Math.max(7, win.u * 0.165)
-                                color: pal.muted
+                                color: pal.mutedText
+                                font.family: win.uiFont
                             }
                         }
                         MouseArea {
@@ -1475,6 +1624,10 @@ Window {
                                 if (modelData.act === "s")         win.preset(440, 220);
                                 else if (modelData.act === "m")    win.preset(560, 280);
                                 else if (modelData.act === "l")    win.preset(720, 360);
+                                else if (modelData.act === "appearance") {
+                                    win.appearanceOpen = true;
+                                    win.customColorOpen = false;
+                                }
                                 else if (modelData.act === "hide") win.hideCompletely();
                                 else if (modelData.act === "caret") {
                                     win.avoidCaret = !win.avoidCaret;
@@ -1492,8 +1645,341 @@ Window {
                                 else { win.persistGeometry(); Qt.quit(); }
                             }
                         }
+                        }
                     }
                 }
+            }
+
+            // The menu lives inside a no-focus keyboard window, so it cannot
+            // safely become a separate desktop popup. Show that the constrained
+            // viewport scrolls instead of silently clipping its final actions.
+            Rectangle {
+                visible: menuFlick.contentHeight > menuFlick.height
+                anchors.right: parent.right
+                anchors.rightMargin: 2
+                width: Math.max(3, win.u * 0.07)
+                height: Math.max(win.u * 0.45,
+                                 parent.height * menuFlick.height / menuFlick.contentHeight)
+                y: (parent.height - height) * menuFlick.contentY
+                   / Math.max(1, menuFlick.contentHeight - menuFlick.height)
+                radius: width / 2
+                color: pal.mutedText
+                opacity: 0.65
+            }
+        }
+
+        // ---------------- appearance: brightness and colour are independent -------
+        Rectangle {
+            id: appearancePanel
+            visible: win.menuOpen && win.appearanceOpen && !win.customColorOpen
+            z: 61
+            x: Math.min(parent.width - width - win.u * 0.1, win.u * 6.2)
+            y: win.chromeH
+            width: win.u * 4.6
+            height: content.height - y - win.u * 0.1
+            color: pal.panelBackground
+            radius: Math.max(3, win.u * 0.12)
+            border.color: pal.keyOutline; border.width: 1
+            clip: true
+            onVisibleChanged: if (visible) appearanceFlick.contentY = 0
+
+            Flickable {
+                id: appearanceFlick
+                anchors.fill: parent
+                contentWidth: width
+                contentHeight: appearanceCol.height + win.u * 0.2
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentHeight > height
+
+                Column {
+                    id: appearanceCol
+                    x: 0; y: win.u * 0.1; width: appearanceFlick.width
+
+                    Rectangle {
+                        width: parent.width; height: win.u * 0.62
+                        color: apBack.containsMouse ? pal.panelHover : pal.panelBackground
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            x: win.u * 0.18
+                            text: "‹  Appearance"
+                            color: pal.keyText; font.family: win.uiFont
+                            font.weight: Font.Medium
+                            font.pixelSize: Math.max(8, win.u * 0.22)
+                        }
+                        MouseArea {
+                            id: apBack; anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: win.appearanceOpen = false
+                        }
+                    }
+
+                    Text {
+                        width: parent.width; height: win.u * 0.42
+                        leftPadding: win.u * 0.2
+                        verticalAlignment: Text.AlignVCenter
+                        text: "MODE"
+                        color: pal.mutedText; font.family: win.uiFont
+                        font.bold: true; font.pixelSize: Math.max(7, win.u * 0.16)
+                    }
+                    Row {
+                        width: parent.width; height: win.u * 0.68
+                        Repeater {
+                            model: [{n: "system", l: "System"}, {n: "light", l: "Light"}, {n: "dark", l: "Dark"}]
+                            Rectangle {
+                                readonly property bool selected: win.themeMode === modelData.n
+                                width: appearanceCol.width / 3; height: win.u * 0.68
+                                color: selected ? pal.accentTint : (modeMouse.containsMouse ? pal.panelHover : pal.panelBackground)
+                                border.color: selected ? pal.accent : pal.keyOutline
+                                border.width: selected ? 2 : 1
+                                Text {
+                                    anchors.centerIn: parent; text: modelData.l
+                                    color: parent.selected ? pal.accent : pal.keyText
+                                    font.family: win.uiFont; font.pixelSize: Math.max(8, win.u * 0.19)
+                                    font.weight: parent.selected ? Font.DemiBold : Font.Normal
+                                }
+                                MouseArea {
+                                    id: modeMouse; anchors.fill: parent; hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: win.setTheme(modelData.n)
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        width: parent.width; height: win.u * 0.48
+                        leftPadding: win.u * 0.2
+                        verticalAlignment: Text.AlignVCenter
+                        text: "COLOR"
+                        color: pal.mutedText; font.family: win.uiFont
+                        font.bold: true; font.pixelSize: Math.max(7, win.u * 0.16)
+                    }
+                    Grid {
+                        width: parent.width; height: win.u * 2.16
+                        columns: 3
+                        Repeater {
+                            model: [
+                                {n: "neutral", l: "Neutral"}, {n: "ocean", l: "Ocean"},
+                                {n: "forest", l: "Forest"}, {n: "plum", l: "Plum"},
+                                {n: "rose", l: "Rose"}, {n: "amber", l: "Amber"},
+                                {n: "custom", l: "Custom…"}
+                            ]
+                            Rectangle {
+                                readonly property bool selected: win.colorway === modelData.n
+                                width: appearanceCol.width / 3; height: win.u * 0.72
+                                color: selected ? pal.accentTint : (swatchMouse.containsMouse ? pal.panelHover : pal.panelBackground)
+                                border.color: selected ? pal.accent : "transparent"
+                                border.width: selected ? 2 : 0
+                                Rectangle {
+                                    x: win.u * 0.14
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: win.u * 0.27; height: width; radius: width / 2
+                                    color: win.colorwaySeed(modelData.n)
+                                    border.color: pal.keyOutline; border.width: 1
+                                }
+                                Text {
+                                    x: win.u * 0.48; width: parent.width - x - win.u * 0.06
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: modelData.l; elide: Text.ElideRight
+                                    color: parent.selected ? pal.accent : pal.keyText
+                                    font.family: win.uiFont; font.pixelSize: Math.max(7, win.u * 0.17)
+                                    font.weight: parent.selected ? Font.DemiBold : Font.Normal
+                                }
+                                MouseArea {
+                                    id: swatchMouse; anchors.fill: parent; hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (modelData.n === "custom") {
+                                            win.setColorway("custom");
+                                            win.customColorOpen = true;
+                                        } else {
+                                            win.setColorway(modelData.n);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: parent.width; height: win.u * 0.62
+                        color: resetMouse.containsMouse ? pal.panelHover : pal.panelBackground
+                        Text {
+                            anchors.centerIn: parent; text: "Reset appearance"
+                            color: pal.mutedText; font.family: win.uiFont
+                            font.pixelSize: Math.max(8, win.u * 0.18)
+                        }
+                        MouseArea {
+                            id: resetMouse; anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: { win.setTheme("system"); win.setColorway("neutral"); }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                visible: appearanceFlick.contentHeight > appearanceFlick.height
+                anchors.right: parent.right; anchors.rightMargin: 2
+                width: Math.max(3, win.u * 0.07)
+                height: Math.max(win.u * 0.45,
+                                 parent.height * appearanceFlick.height / appearanceFlick.contentHeight)
+                y: (parent.height - height) * appearanceFlick.contentY
+                   / Math.max(1, appearanceFlick.contentHeight - appearanceFlick.height)
+                radius: width / 2; color: pal.mutedText; opacity: 0.65
+            }
+        }
+
+        // ---------------- custom colour: mouse-first RGB picker --------------------
+        Rectangle {
+            id: customColorPanel
+            visible: win.menuOpen && win.appearanceOpen && win.customColorOpen
+            z: 62
+            x: Math.min(parent.width - width - win.u * 0.1, win.u * 6.2)
+            y: win.chromeH
+            width: win.u * 4.6
+            height: content.height - y - win.u * 0.1
+            color: pal.panelBackground
+            radius: Math.max(3, win.u * 0.12)
+            border.color: pal.keyOutline; border.width: 1
+            clip: true
+            onVisibleChanged: if (visible) customFlick.contentY = 0
+
+            Flickable {
+                id: customFlick
+                anchors.fill: parent
+                contentWidth: width
+                contentHeight: customCol.height + win.u * 0.2
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentHeight > height
+
+                Column {
+                    id: customCol
+                    x: 0; y: win.u * 0.1; width: customFlick.width
+
+                    Rectangle {
+                        width: parent.width; height: win.u * 0.62
+                        color: customBack.containsMouse ? pal.panelHover : pal.panelBackground
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            x: win.u * 0.18; text: "‹  Custom color"
+                            color: pal.keyText; font.family: win.uiFont
+                            font.weight: Font.Medium
+                            font.pixelSize: Math.max(8, win.u * 0.22)
+                        }
+                        MouseArea {
+                            id: customBack; anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: { win.saveCustomColor(); win.customColorOpen = false; }
+                        }
+                    }
+
+                    Item {
+                        width: parent.width; height: win.u * 0.78
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: parent.width - win.u * 0.4; height: win.u * 0.52
+                            radius: win.u * 0.12
+                            color: win.seedColor
+                            border.color: pal.keyOutline; border.width: 1
+                            Text {
+                                anchors.centerIn: parent; text: win.customHex
+                                color: win.accentTextFor(win.seedColor)
+                                font.family: "monospace"; font.bold: true
+                                font.pixelSize: Math.max(9, win.u * 0.22)
+                            }
+                        }
+                    }
+
+                    Repeater {
+                        model: [
+                            {c: "r", l: "R", fill: "#d85a5a"},
+                            {c: "g", l: "G", fill: "#4caa70"},
+                            {c: "b", l: "B", fill: "#538bd4"}
+                        ]
+                        Rectangle {
+                            id: sliderRow
+                            readonly property int channelValue: modelData.c === "r" ? win.customRed
+                                                                  : modelData.c === "g" ? win.customGreen
+                                                                                           : win.customBlue
+                            width: customCol.width; height: win.u * 0.72
+                            color: "transparent"
+                            Text {
+                                x: win.u * 0.2; width: win.u * 0.35
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.l; color: pal.keyText
+                                font.family: win.uiFont; font.bold: true
+                                font.pixelSize: Math.max(8, win.u * 0.19)
+                            }
+                            Rectangle {
+                                id: sliderTrack
+                                x: win.u * 0.62
+                                width: parent.width - win.u * 1.45
+                                height: Math.max(5, win.u * 0.12)
+                                anchors.verticalCenter: parent.verticalCenter
+                                radius: height / 2; color: pal.actionBackground
+                                Rectangle {
+                                    width: parent.width * sliderRow.channelValue / 255
+                                    height: parent.height; radius: parent.radius
+                                    color: modelData.fill
+                                }
+                                Rectangle {
+                                    x: parent.width * sliderRow.channelValue / 255 - width / 2
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: win.u * 0.28; height: width; radius: width / 2
+                                    color: pal.panelBackground
+                                    border.color: modelData.fill; border.width: 2
+                                }
+                            }
+                            Text {
+                                anchors.right: parent.right; anchors.rightMargin: win.u * 0.16
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: win.u * 0.58
+                                horizontalAlignment: Text.AlignRight
+                                text: sliderRow.channelValue
+                                color: pal.mutedText; font.family: "monospace"
+                                font.pixelSize: Math.max(8, win.u * 0.18)
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                function updateValue(mouse) {
+                                    win.setCustomChannel(modelData.c,
+                                        (mouse.x - sliderTrack.x) * 255 / sliderTrack.width);
+                                }
+                                onPressed: function(mouse) { updateValue(mouse); }
+                                onPositionChanged: function(mouse) { if (pressed) updateValue(mouse); }
+                                onReleased: win.saveCustomColor()
+                                onWheel: function(wheel) {
+                                    win.setCustomChannel(modelData.c, sliderRow.channelValue
+                                                         + (wheel.angleDelta.y > 0 ? 1 : -1));
+                                    win.saveCustomColor();
+                                    wheel.accepted = true;
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        width: parent.width; height: win.u * 0.52
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        text: "Changes preview live"
+                        color: pal.mutedText; font.family: win.uiFont
+                        font.pixelSize: Math.max(7, win.u * 0.16)
+                    }
+                }
+            }
+
+            Rectangle {
+                visible: customFlick.contentHeight > customFlick.height
+                anchors.right: parent.right; anchors.rightMargin: 2
+                width: Math.max(3, win.u * 0.07)
+                height: Math.max(win.u * 0.45,
+                                 parent.height * customFlick.height / customFlick.contentHeight)
+                y: (parent.height - height) * customFlick.contentY
+                   / Math.max(1, customFlick.contentHeight - customFlick.height)
+                radius: width / 2; color: pal.mutedText; opacity: 0.65
             }
         }
     }
@@ -1658,7 +2144,7 @@ Window {
             x: parent.width - width; y: parent.height - height
             onPaint: {
                 const ctx = getContext("2d"); ctx.reset();
-                ctx.strokeStyle = pal.muted; ctx.lineWidth = 1;
+                ctx.strokeStyle = pal.mutedText; ctx.lineWidth = 1;
                 for (let i = 1; i <= 3; i++) {
                     ctx.beginPath();
                     ctx.moveTo(width - i * (width / 4) - 1, height - 1);
